@@ -1,0 +1,48 @@
+phase: mid_flower
+
+day:
+  VPD_target: 1.2            # kPa
+  T_target: 26.0             # °C
+  CO2_target: 1200.0         # ppm
+  dryback_rate_target: 0.0   # m³/m³/hr (managed by irrigation schedule)
+  theta_target: 0.35         # m³/m³
+
+night:
+  VPD_target: 0.8            # kPa
+  T_target: 22.0             # °C
+  CO2_target: 800.0          # ppm
+  dryback_rate_target: 0.002 # m³/m³/hr (gentle dryback overnight)
+  theta_target: 0.30         # m³/m³
+
+# Transition ramp settings
+ramp_minutes: 15             # ramp between day/night targets over 15 min
+
+# Compliance thresholds
+compliance:
+  VPD_tolerance: 0.15        # kPa
+  T_tolerance: 1.0           # °C
+  CO2_tolerance: 100.0       # ppm
+  theta_tolerance: 0.05      # m³/m³
+
+# MPC weights for this phase
+weights:
+  Q:  # State tracking weights
+    VPD: 10.0
+    T: 5.0
+    CO2: 1.0
+    dryback: 3.0
+    theta: 2.0
+  R:  # Control effort weights
+    T_sp: 0.1
+    RH_sp: 0.1
+    u_hum: 0.5
+    u_co2: 0.3
+    u_fan: 0.2
+    u_irr: 1.0
+  S:  # Control rate-of-change weights
+    T_sp: 1.0
+    RH_sp: 1.0
+    u_hum: 0.5
+    u_co2: 0.3
+    u_fan: 0.5
+    u_irr: 2.0

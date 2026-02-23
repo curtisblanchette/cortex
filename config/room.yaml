@@ -1,0 +1,37 @@
+room:
+  volume_m3: 280.0          # 10m x 7m x 4m
+  floor_area_m2: 70.0       # 10m x 7m
+  canopy_area_m2: 56.0      # ~80% of floor
+  wall_area_m2: 136.0       # total interior wall surface
+
+  # Initial parameter estimates (SLSQP will tune these)
+  initial_params:
+    UA_wall: 50.0            # W/K - wall thermal conductance
+    UA_env: 25.0             # W/K - envelope conductance to outdoors
+    tau_hvac: 120.0          # s - HVAC time constant
+    g_s_max: 0.4             # mol/m²/s - max stomatal conductance
+    LAI: 3.0                 # m²/m² - leaf area index
+    K_drain: 0.05            # 1/hr - drainage coefficient
+    C_wall: 500000.0         # J/K - thermal mass capacitance
+    eta_hvac: 0.85           # - HVAC efficiency
+
+  # Air properties
+  rho_air: 1.2              # kg/m³
+  cp_air: 1005.0            # J/(kg·K)
+
+  # Light schedule
+  light_schedule:
+    on_hour: 6.0
+    off_hour: 18.0
+  light_power_W: 50000.0    # total lighting power
+  par_efficiency: 0.4        # fraction of light power that is PAR (rest is heat)
+
+  # Outdoor conditions (defaults)
+  outdoor:
+    T_out_mean_C: 28.0
+    T_out_amplitude_C: 5.0
+    w_out_gkg: 12.0
+
+  # Plant defaults
+  N_plants: 100
+  phase: mid_flower

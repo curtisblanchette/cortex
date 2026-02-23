@@ -1,0 +1,20 @@
+cultivar: default
+description: Generic cannabis profile
+
+# VPD preferences (offsets from phase targets)
+vpd_offset: 0.0             # kPa added to phase VPD target
+
+# Temperature preferences
+temp_offset: 0.0             # °C added to phase T target
+
+# Transpiration characteristics
+transpiration_scale: 1.0     # multiplier on base transpiration rate
+
+# Growth phase durations (days)
+phase_durations:
+  clone: 14
+  veg: 21
+  early_flower: 14
+  mid_flower: 28
+  late_flower: 14
+  dry: 14

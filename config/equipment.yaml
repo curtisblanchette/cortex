@@ -1,0 +1,85 @@
+hvacd:
+  model: "Desert Aire"
+  mode: setpoint              # setpoint or direct
+
+  # Capacity
+  cooling_capacity_W: 35000.0
+  heating_capacity_W: 15000.0
+  dehumidification_L_hr: 8.0  # liters per hour max moisture removal
+  supply_airflow_cfm: 3000.0
+
+  # Modbus
+  modbus_address: 1
+  modbus_port: "/dev/ttyUSB0"
+  modbus_baudrate: 9600
+
+  # Register map
+  registers:
+    temp_setpoint: 100
+    rh_setpoint: 101
+    fan_speed: 102
+    mode: 103
+    supply_temp_read: 200
+    return_temp_read: 201
+
+  # Operating limits
+  limits:
+    T_sp_min: 15.0           # °C
+    T_sp_max: 32.0           # °C
+    RH_sp_min: 40.0          # %
+    RH_sp_max: 80.0          # %
+    fan_min_pct: 20.0        # % - minimum fan speed
+    fan_max_pct: 100.0       # %
+
+actuators:
+  co2:
+    type: solenoid
+    interface: mqtt
+    topic: "cortex/room1/co2"
+    flow_rate_ppm_s: 50.0    # ppm/s at full flow
+    max_pct: 100.0
+
+  humidifier:
+    type: solenoid
+    interface: mqtt
+    topic: "cortex/room1/humidifier"
+    capacity_g_hr: 2000.0    # g/hr at full output
+    max_pct: 100.0
+
+  irrigation:
+    type: solenoid
+    interface: mqtt
+    topic: "cortex/room1/irrigation"
+    flow_rate_ml_s: 50.0
+    max_pct: 100.0
+
+  fan:
+    type: variable_speed
+    interface: modbus
+    min_pct: 20.0
+    max_pct: 100.0
+
+sensors:
+  esp32:
+    mqtt_topic: "cortex/room1/sensors/#"
+    staleness_threshold_s: 5.0
+    devices:
+      sht31:
+        measures: [T_air, RH]
+        accuracy_T: 0.3       # °C
+        accuracy_RH: 2.0      # %
+      scd30:
+        measures: [CO2]
+        accuracy: 30.0        # ppm
+      mlx90614:
+        measures: [T_leaf]
+        accuracy: 0.5         # °C
+      thermocouple:
+        measures: [T_supply]
+        accuracy: 0.3         # °C
+
+  aroya:
+    api_poll_interval_s: 180.0
+    staleness_threshold_s: 600.0
+    measures: [theta, EC]
+    accuracy_theta: 0.01      # m³/m³
