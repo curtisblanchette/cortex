@@ -108,11 +108,11 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     C_LIGHT_OFF = '#E8EAF6'   # light blue-grey
     C_GRID = '#E0E0E0'
 
-    fig = plt.figure(figsize=(20, 22))
+    fig = plt.figure(figsize=(20, 16))
     fig.patch.set_facecolor('#FAFAFA')
 
-    gs = GridSpec(4, 2, figure=fig, hspace=0.35, wspace=0.25,
-                  left=0.06, right=0.97, top=0.95, bottom=0.04)
+    gs = GridSpec(4, 2, figure=fig, hspace=0.28, wspace=0.25,
+                  left=0.06, right=0.97, top=0.93, bottom=0.05)
 
     # Helper: shade light on/off periods
     def shade_lights(ax, t_hours, d_array):
@@ -154,7 +154,7 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
                       color=C_TOLERANCE, alpha=0.3, zorder=1, label=f'±{tol}°C')
     ax1.plot(t, x[:, 6], color='#795548', linewidth=0.6, alpha=0.6, label='T_wall')
     ax1.legend(loc='upper right', fontsize=8, ncol=3)
-    ax1.set_title('Temperature Tracking', fontsize=13, fontweight='bold', pad=10)
+    ax1.set_title('Temperature Tracking', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax1, 'Temperature (°C)')
 
     # ===== Panel 2: VPD =====
@@ -166,7 +166,7 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     ax2.fill_between(t, data['vpd_target'] - tol_vpd, data['vpd_target'] + tol_vpd,
                       color=C_TOLERANCE, alpha=0.3, zorder=1, label=f'±{tol_vpd} kPa')
     ax2.legend(loc='upper right', fontsize=8)
-    ax2.set_title('VPD Tracking', fontsize=13, fontweight='bold', pad=10)
+    ax2.set_title('VPD Tracking', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax2, 'VPD (kPa)')
 
     # ===== Panel 3: Humidity =====
@@ -179,7 +179,7 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     lns = ln1 + ln2
     labs = [l.get_label() for l in lns]
     ax3.legend(lns, labs, loc='upper right', fontsize=8)
-    ax3.set_title('Humidity', fontsize=13, fontweight='bold', pad=10)
+    ax3.set_title('Humidity', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax3, 'Relative Humidity (%)')
     ax3_wa.set_ylabel('Absolute Humidity (g/kg)', fontsize=10, color=C_CONTROL)
     ax3_wa.tick_params(labelsize=9, colors=C_CONTROL)
@@ -193,7 +193,7 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     ax4.fill_between(t, data['co2_target'] - tol_co2, data['co2_target'] + tol_co2,
                       color=C_TOLERANCE, alpha=0.3, zorder=1)
     ax4.legend(loc='upper right', fontsize=8)
-    ax4.set_title('CO2 Tracking', fontsize=13, fontweight='bold', pad=10)
+    ax4.set_title('CO2 Tracking', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax4, 'CO2 (ppm)')
 
     # ===== Panel 5: Substrate Water =====
@@ -206,7 +206,7 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     ax5.fill_between(t, data['theta_target'] - tol_th, data['theta_target'] + tol_th,
                       color=C_TOLERANCE, alpha=0.3, zorder=1)
     ax5.legend(loc='upper right', fontsize=8)
-    ax5.set_title('Substrate Water Content', fontsize=13, fontweight='bold', pad=10)
+    ax5.set_title('Substrate Water Content', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax5, 'θ (m³/m³)', show_xlabel=True)
 
     # ===== Panel 6: Control Actions =====
@@ -219,7 +219,7 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     ax6.plot(t, u[:, 2], color='#00BCD4', linewidth=0.8, label='Humidifier (%)', zorder=3)
     ax6.plot(t, u[:, 5], color='#795548', linewidth=0.8, label='Irrigation (%)', zorder=3)
     ax6.legend(loc='upper right', fontsize=7, ncol=2)
-    ax6.set_title('Control Actions', fontsize=13, fontweight='bold', pad=10)
+    ax6.set_title('Control Actions', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax6, 'Setpoint / Output', show_xlabel=True)
 
     # ===== Panel 7: MPC Diagnostics =====
@@ -231,7 +231,7 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     lns = ln1 + ln2
     labs = [l.get_label() for l in lns]
     ax7.legend(lns, labs, loc='upper right', fontsize=8)
-    ax7.set_title('MPC Diagnostics', fontsize=13, fontweight='bold', pad=10)
+    ax7.set_title('MPC Diagnostics', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax7, 'Solve Time (ms)', show_xlabel=True)
     ax7_inn.set_ylabel('Innovation RMS', fontsize=10, color=C_CONTROL2)
     ax7_inn.tick_params(labelsize=9, colors=C_CONTROL2)
@@ -255,18 +255,9 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
         ax8.axvline(95, color='#4CAF50', linewidth=1.5, linestyle='--', alpha=0.7, label='95% target')
         ax8.axvline(80, color='#FF9800', linewidth=1, linestyle=':', alpha=0.5, label='80% warning')
 
-        # Add compliance details as text
-        detail_y = -0.15
-        for k in keys:
-            r = compliance_report[k]
-            ax8.text(55, detail_y, f"{k}: mean={r['mean']:.3f}  σ={r['std']:.3f}  [{r['min']:.3f}, {r['max']:.3f}]",
-                     transform=ax8.get_yaxis_transform(), fontsize=7, color='#666',
-                     va='top', fontfamily='monospace')
-            detail_y -= 0.08
-
         ax8.legend(loc='lower right', fontsize=8)
 
-    ax8.set_title('Compliance Summary', fontsize=13, fontweight='bold', pad=10)
+    ax8.set_title('Compliance Summary', fontsize=13, fontweight='bold', pad=6)
     ax8.set_xlabel('Compliance (%)', fontsize=11)
     ax8.tick_params(labelsize=10)
     ax8.grid(True, axis='x', color=C_GRID, linewidth=0.5, alpha=0.7)
@@ -274,7 +265,7 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     # Title
     hours = duration_s / 3600
     fig.suptitle(f'Cortex MPC — {hours:.0f}h Simulation', fontsize=18,
-                 fontweight='bold', y=0.98)
+                 fontweight='bold', y=0.97)
 
     # Save
     os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
