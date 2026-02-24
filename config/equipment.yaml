@@ -59,6 +59,49 @@ actuators:
     min_pct: 20.0
     max_pct: 100.0
 
+dispatch:
+  cool:
+    dead_band: 0.5              # °C — don't change T setpoint for < 0.5°C difference
+    min_hold_s: 120             # Don't change cooling setpoint more often than every 2 min
+    rate_limit: 2.0             # °C/min max ramp rate
+    anti_short_cycle_s: 300     # 5 min minimum compressor run time
+    protocol: modbus
+
+  heat:
+    dead_band: 0.5              # °C
+    min_hold_s: 120
+    rate_limit: 2.0             # °C/min
+    anti_short_cycle_s: 180     # 3 min minimum for reheat
+    protocol: modbus
+    conflicts: [cool]           # Never heat + cool simultaneously
+
+  co2:
+    dead_band: 50               # ppm — don't toggle solenoid for < 50 ppm difference
+    min_hold_s: 30              # Minimum 30s on or off
+    rate_limit: null            # Binary — no ramp
+    protocol: mqtt_relay
+    lights_only: true           # Never inject CO2 during dark period
+
+  humidifier:
+    dead_band: 3.0              # %RH
+    min_hold_s: 60
+    rate_limit: null
+    protocol: mqtt_relay
+    conflicts: [dehumidify]     # Never humidify + dehumidify simultaneously
+
+  fan:
+    dead_band: 0.05             # 5% — don't change for tiny differences
+    min_hold_s: 30
+    rate_limit: 0.1             # 10%/min max ramp rate (VFD-friendly)
+    protocol: modbus_0_10v
+
+  irrigation:
+    dead_band: null             # Event-driven, not continuous
+    min_hold_s: 300             # 5 min minimum between irrigation events
+    rate_limit: null
+    protocol: mqtt_relay
+    max_daily_events: 12        # Safety cap
+
 sensors:
   esp32:
     mqtt_topic: "cortex/room1/sensors/#"

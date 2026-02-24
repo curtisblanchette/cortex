@@ -13,6 +13,7 @@ Decision variables: [u[0], ..., u[Nc-1], x[1], ..., x[Np]]
 
 import numpy as np
 import osqp
+from osqp import SolverStatus
 from scipy import sparse
 
 from core.dynamics import GrowRoomDynamics, N_STATES, N_CONTROLS, N_DISTURBANCES
@@ -56,13 +57,22 @@ class MPCSolver:
 
         self.constraints = constraints or ConstraintBuilder()
 
-        # QP solver instance (created on first solve)
+        # QP solver instance (created on first solve, reused via update())
         self._solver = None
         self._solver_initialized = False
 
-        # Previous solution for warm-starting
+        # CSC sparsity templates (row/col indices in CSC data order, set on first solve)
+        self._P_row_idx = None   # row indices of P's structural nonzeros
+        self._P_col_idx = None   # col indices (derived from indptr)
+        self._A_row_idx = None   # same for A
+        self._A_col_idx = None
+        self._P_template = None  # CSC template for P (structural pattern)
+        self._A_template = None  # CSC template for A (structural pattern)
+
+        # Previous solution for warm-starting (primal + dual)
         self._prev_u = None
         self._prev_x = None
+        self._prev_y = None
 
         # Solve statistics
         self.last_solve_info = {
@@ -161,15 +171,16 @@ class MPCSolver:
             trajectory = np.tile(x_hat, (self.Np, 1))
             return u_fallback, trajectory, self.last_solve_info
 
-    def _solve_qp(self, x0, A_d, B_d, Bd_d, C_out, d_forecast, reference,
-                  u_prev, Q_diag, R_diag, S_diag, c_d=None):
-        """Formulate and solve the QP.
+    def _build_qp_matrices(self, x0, A_d, B_d, Bd_d, C_out, d_forecast,
+                           reference, u_prev, Q_diag, R_diag, S_diag, c_d=None):
+        """Assemble QP cost and constraint matrices (dense).
 
-        Decision variables z = [u[0], ..., u[Nc-1], x[1], ..., x[Np]]
-        Total variables: Nc * n_u + Np * n_x
-
-        The dynamics constraint is the affine model:
-            x[k+1] = A_d x[k] + B_d u[k] + Bd_d d[k] + c_d
+        Returns:
+            P_dense: Hessian (n_dec, n_dec), symmetric, pre-regularized.
+            q: Gradient (n_dec,).
+            A_dense: Constraint matrix (n_con, n_dec).
+            l_all: Lower bounds (n_con,).
+            u_all: Upper bounds (n_con,).
         """
         Np, Nc = self.Np, self.Nc
         n_x, n_u, n_y = self.n_x, self.n_u, self.n_y
@@ -214,11 +225,6 @@ class MPCSolver:
             ref_k = reference[k] if k < len(reference) else reference[-1]
             q[x_start:x_end] -= C_out.T @ np.diag(Q_diag) @ ref_k
 
-        # Regularize and make symmetric
-        P = 0.5 * (P + P.T)
-        P += 1e-6 * np.eye(n_dec)  # small regularization for positive definiteness
-        P = sparse.csc_matrix(sparse.triu(P))  # OSQP expects upper triangular
-
         # ===== Equality constraints: affine dynamics =====
         # x[k+1] = A_d @ x[k] + B_d @ u[k] + Bd_d @ d[k] + c_d
         # Rearranged: A_d @ x[k] + B_d @ u[k] - x[k+1] = -Bd_d @ d[k] - c_d
@@ -256,10 +262,8 @@ class MPCSolver:
             b_eq[row_start:row_end] -= Bd_d @ d_k + c_d
 
         # ===== Inequality constraints: bounds =====
-        # State bounds
         x_lb, x_ub = self.constraints.get_state_bounds(Np)
         u_lb, u_ub = self.constraints.get_control_bounds(Nc)
-        du_lb, du_ub = self.constraints.get_du_bounds(Nc)
 
         # Assemble full bounds
         lb = np.concatenate([u_lb, x_lb])
@@ -286,7 +290,7 @@ class MPCSolver:
                 du_upper[row_start:row_start + n_u] = self.constraints.du_max
 
         # Stack all constraints
-        A_all = np.vstack([
+        A_dense = np.vstack([
             A_eq,                    # Equality (dynamics)
             np.eye(n_dec),           # Variable bounds
             A_du,                    # Rate constraints
@@ -295,40 +299,111 @@ class MPCSolver:
         l_all = np.concatenate([b_eq, lb, du_lower])
         u_all = np.concatenate([b_eq, ub, du_upper])
 
-        A_sparse = sparse.csc_matrix(A_all)
+        return P, q, A_dense, l_all, u_all
 
-        # ===== Solve with OSQP =====
-        solver = osqp.OSQP()
-        solver.setup(
-            P=P, q=q, A=A_sparse, l=l_all, u=u_all,
-            eps_abs=1e-3,
-            eps_rel=1e-3,
-            max_iter=4000,
-            warm_start=True,
-            verbose=False,
-            polish=True,
-            adaptive_rho=True,
-            scaling=10,
+    def _solve_qp(self, x0, A_d, B_d, Bd_d, C_out, d_forecast, reference,
+                  u_prev, Q_diag, R_diag, S_diag, c_d=None):
+        """Formulate and solve the QP.
+
+        Decision variables z = [u[0], ..., u[Nc-1], x[1], ..., x[Np]]
+        Total variables: Nc * n_u + Np * n_x
+
+        On the first call, creates the OSQP instance via setup(). On subsequent
+        calls, reuses the instance via update() to skip the expensive symbolic
+        KKT factorization.
+        """
+        Np, Nc = self.Np, self.Nc
+        n_x, n_u = self.n_x, self.n_u
+        n_dec = Nc * n_u + Np * n_x
+
+        # Assemble dense QP matrices
+        P_dense, q, A_dense, l_all, u_all = self._build_qp_matrices(
+            x0, A_d, B_d, Bd_d, C_out, d_forecast, reference,
+            u_prev, Q_diag, R_diag, S_diag, c_d=c_d,
         )
 
-        # Warm start from previous solution
+        # Symmetrize + regularize P, take upper triangle
+        P_dense = 0.5 * (P_dense + P_dense.T)
+        P_dense += 1e-6 * np.eye(n_dec)
+        P_upper = np.triu(P_dense)
+
+        if not self._solver_initialized:
+            # === First solve: build structural templates + full setup ===
+            self._P_template, self._A_template = self._build_structural_templates()
+
+            # Save CSC-order index arrays (row/col for each entry in .data)
+            self._P_row_idx = self._P_template.indices.copy()
+            self._P_col_idx = np.repeat(
+                np.arange(self._P_template.shape[1]),
+                np.diff(self._P_template.indptr))
+            self._A_row_idx = self._A_template.indices.copy()
+            self._A_col_idx = np.repeat(
+                np.arange(self._A_template.shape[1]),
+                np.diff(self._A_template.indptr))
+
+            # Fill template copies with actual values
+            P_csc = self._P_template.copy()
+            P_csc.data[:] = P_upper[self._P_row_idx, self._P_col_idx]
+            A_csc = self._A_template.copy()
+            A_csc.data[:] = A_dense[self._A_row_idx, self._A_col_idx]
+
+            self._solver = osqp.OSQP()
+            self._solver.setup(
+                P=P_csc, q=q, A=A_csc, l=l_all, u=u_all,
+                eps_abs=1e-3,
+                eps_rel=1e-3,
+                max_iter=4000,
+                warm_start=True,
+                verbose=False,
+                polish=True,
+                adaptive_rho=True,
+                scaling=10,
+            )
+            self._solver_initialized = True
+        else:
+            # === Subsequent solves: update values only ===
+            try:
+                Px = P_upper[self._P_row_idx, self._P_col_idx]
+                Ax = A_dense[self._A_row_idx, self._A_col_idx]
+                self._solver.update(Px=Px, q=q, Ax=Ax, l=l_all, u=u_all)
+            except Exception:
+                # Dimension mismatch or other error — reset and retry
+                self._solver_initialized = False
+                self._solver = None
+                return self._solve_qp(
+                    x0, A_d, B_d, Bd_d, C_out, d_forecast, reference,
+                    u_prev, Q_diag, R_diag, S_diag, c_d=c_d,
+                )
+
+        # Warm-start from previous solution (primal + dual)
         if self._prev_u is not None and self._prev_x is not None:
             try:
                 x_warm = self._shift_warmstart()
-                solver.warm_start(x=x_warm)
+                y_warm = self._shift_dual_warmstart() if self._prev_y is not None else None
+                self._solver.warm_start(x=x_warm, y=y_warm)
             except (ValueError, IndexError):
                 pass
 
-        result = solver.solve()
+        import time as _t
+        _t0 = _t.perf_counter()
+        result = self._solver.solve()
+        _solve_ms = (_t.perf_counter() - _t0) * 1000
 
         info = {
             'status': result.info.status,
             'iterations': result.info.iter,
             'setup_time_ms': result.info.setup_time * 1000 if hasattr(result.info, 'setup_time') else 0,
+            '_solve_only_ms': _solve_ms,
         }
 
-        if result.info.status not in ('solved', 'solved_inaccurate'):
+        if result.info.status_val not in (
+            SolverStatus.OSQP_SOLVED,
+            SolverStatus.OSQP_SOLVED_INACCURATE,
+        ):
             raise RuntimeError(f"OSQP failed: {result.info.status}")
+
+        # Save dual variables for next warm-start
+        self._prev_y = result.y
 
         u_opt_seq = result.x[:Nc * n_u]
         x_pred_seq = result.x[Nc * n_u:]
@@ -399,6 +474,93 @@ class MPCSolver:
         x_warm[(Np - 1) * n_x:] = self._prev_x[(Np - 1) * n_x:Np * n_x]
 
         return np.concatenate([u_warm, x_warm])
+
+    def _shift_dual_warmstart(self):
+        """Shift previous dual variables forward by one step.
+
+        The dual (y) vector corresponds to constraints:
+            [dynamics (Np*n_x), bounds (n_dec), rate (Nc*n_u)]
+        Shift the dynamics block forward; bounds and rate blocks stay as-is.
+        """
+        Np, Nc = self.Np, self.Nc
+        n_x, n_u = self.n_x, self.n_u
+        n_dec = Nc * n_u + Np * n_x
+
+        y = self._prev_y.copy()
+        n_eq = Np * n_x
+
+        # Shift dynamics dual: [y_eq[1], ..., y_eq[Np-1], y_eq[Np-1]]
+        for k in range(Np - 1):
+            y[k * n_x:(k + 1) * n_x] = self._prev_y[(k + 1) * n_x:(k + 2) * n_x]
+        # Last block repeats
+        y[(Np - 1) * n_x:Np * n_x] = self._prev_y[(Np - 1) * n_x:Np * n_x]
+
+        # Bounds and rate duals (indices n_eq onward) are kept as-is
+        return y
+
+    def _build_structural_templates(self):
+        """Build CSC template matrices covering all structurally-nonzero positions.
+
+        The sparsity pattern of P and A varies across linearization points
+        (e.g., A_d, B_d, Q_full entries can be zero at one operating point
+        and nonzero at another). This method fills ALL block positions with
+        1.0, ensuring the CSC structure has slots for every entry that could
+        ever be nonzero. OSQP's update() can then set any value at those
+        positions without hitting "not quasidefinite" errors.
+        """
+        Np, Nc = self.Np, self.Nc
+        n_x, n_u = self.n_x, self.n_u
+        n_dec = Nc * n_u + Np * n_x
+        x_off = Nc * n_u
+
+        # --- P template (upper triangle) ---
+        P = np.zeros((n_dec, n_dec))
+        np.fill_diagonal(P, 1.0)  # regularization diagonal
+        for k in range(Nc):
+            s = k * n_u
+            P[s:s+n_u, s:s+n_u] = 1.0          # R + S diagonal blocks
+            if k > 0:
+                ps = (k - 1) * n_u
+                P[ps:ps+n_u, s:s+n_u] = 1.0    # S off-diagonal (upper tri)
+        for k in range(Np):
+            s = x_off + k * n_x
+            P[s:s+n_x, s:s+n_x] = 1.0          # Q_full diagonal blocks
+        P = np.triu(P)
+        P_csc = sparse.csc_matrix(P)
+
+        # --- A template ---
+        n_eq = Np * n_x
+        n_du = Nc * n_u
+        n_con = n_eq + n_dec + n_du
+        A = np.zeros((n_con, n_dec))
+
+        # Dynamics rows
+        for k in range(Np):
+            rs = k * n_x
+            x_k1 = x_off + k * n_x
+            A[rs:rs+n_x, x_k1:x_k1+n_x] = 1.0         # -I on x[k+1]
+            if k > 0:
+                x_k = x_off + (k - 1) * n_x
+                A[rs:rs+n_x, x_k:x_k+n_x] = 1.0        # A_d on x[k] (dense)
+            u_k = min(k, Nc - 1)
+            u_s = u_k * n_u
+            A[rs:rs+n_x, u_s:u_s+n_u] = 1.0             # B_d on u[k] (dense)
+
+        # Bounds rows: identity
+        A[n_eq:n_eq+n_dec, :] = np.eye(n_dec)
+
+        # Rate rows: I on u[k], -I on u[k-1]
+        for k in range(Nc):
+            rs = n_eq + n_dec + k * n_u
+            u_s = k * n_u
+            A[rs:rs+n_u, u_s:u_s+n_u] = 1.0
+            if k > 0:
+                ps = (k - 1) * n_u
+                A[rs:rs+n_u, ps:ps+n_u] = 1.0
+
+        A_csc = sparse.csc_matrix(A)
+
+        return P_csc, A_csc
 
     def _get_params(self):
         """Get current calibration parameters."""
