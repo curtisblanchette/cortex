@@ -7,7 +7,8 @@ import sys
 import numpy as np
 
 from cli.bootstrap import (
-    load_configs, make_redis, build_shared_params, build_dynamics,
+    load_configs, make_redis, build_registry, build_shared_params,
+    build_dynamics,
 )
 
 
@@ -90,8 +91,9 @@ def run(args):
     print("[Cortex] Redis connected.")
 
     configs = load_configs(args.config)
+    registry = build_registry(configs)
     shared_params = build_shared_params()
-    dynamics = build_dynamics(configs, shared_params)
+    dynamics = build_dynamics(configs, shared_params, registry)
 
     telemetry_source = RedisTelemetrySource(redis_client, room_id=args.room_id)
 

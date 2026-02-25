@@ -1,34 +1,23 @@
-#!/usr/bin/env python3
-"""Run a simulation and generate comprehensive visualization charts.
+"""Telemetry recording and chart generation for simulation runs."""
 
-Usage:
-    python scripts/visualize.py                          # 4h default
-    python scripts/visualize.py --duration 86400         # 24h
-    python scripts/visualize.py --output charts/run1.png # custom output path
-"""
-
-import argparse
-import sys
 import os
-import time
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
-from matplotlib.patches import Rectangle
-from matplotlib.colors import LinearSegmentedColormap
-
-from main import build_simulation
 
 
 class TelemetryRecorder:
     """Captures per-tick data from the control loop for visualization."""
 
-    def __init__(self):
+    # Fallback actuator order (used when no registry provided)
+    ACTUATOR_ORDER = ['cool', 'heat', 'co2', 'humidifier', 'fan', 'irrigation']
+
+    def __init__(self, registry=None):
+        if registry is not None:
+            self.ACTUATOR_ORDER = registry.actuator_order()
         self.time = []
         self.x_hat = []
         self.x_true = []
@@ -45,12 +34,14 @@ class TelemetryRecorder:
         self.solve_ms = []
         self.innovation_rms = []
         self.failsafe = []
+        self.dispatch_commands = []  # per-tick gateway dispatched values
 
     def record(self, x_hat, u, derived, info, sim_room, ref_targets):
         self.time.append(info['time_s'])
         self.x_hat.append(x_hat.copy())
         self.x_true.append(sim_room.x_true.copy())
-        self.u.append(u.copy() if u is not None else np.zeros(6))
+        n_u = len(self.ACTUATOR_ORDER) if u is None else len(u)
+        self.u.append(u.copy() if u is not None else np.zeros(n_u))
         self.d.append(sim_room.disturbance_schedule.get(sim_room.time))
         self.vpd.append(derived['VPD'])
         self.rh.append(derived['RH'])
@@ -61,6 +52,19 @@ class TelemetryRecorder:
         self.solve_ms.append(info.get('solve_ms', 0))
         self.innovation_rms.append(info.get('innovation_rms', 0))
         self.failsafe.append(info.get('failsafe_level', 'P1_NORMAL'))
+
+    def record_dispatch(self, decisions):
+        """Record gateway dispatch decisions for this tick.
+
+        Args:
+            decisions: List of (actuator_name, DispatchResult) from gateway.
+        """
+        tick_cmds = {}
+        for name, result in decisions:
+            tick_cmds[name] = result.command
+        # Fill missing actuators with 0
+        row = [tick_cmds.get(a, 0.0) for a in self.ACTUATOR_ORDER]
+        self.dispatch_commands.append(row)
 
     def to_arrays(self):
         return {
@@ -78,23 +82,28 @@ class TelemetryRecorder:
             'solve_ms': np.array(self.solve_ms),
             'innovation_rms': np.array(self.innovation_rms),
             'failsafe': self.failsafe,
+            'dispatch': np.array(self.dispatch_commands) if self.dispatch_commands else None,
+            'dispatch_labels': self.ACTUATOR_ORDER,
         }
 
 
 def plot_simulation(data, compliance_report, duration_s, output_path):
     """Generate a comprehensive multi-panel visualization.
 
-    Layout (8 panels):
-      Row 1: Temperature tracking  |  VPD tracking
-      Row 2: Humidity (RH + w_a)   |  CO2 tracking
-      Row 3: Substrate (θ)         |  Control actions
-      Row 4: MPC diagnostics       |  Compliance summary
+    Layout (5x2 with dispatch, 4x2 without):
+      Row 1: Temperature tracking      |  VPD tracking
+      Row 2: Humidity (RH + w_a)       |  CO2 tracking
+      Row 3: Substrate (\u03b8)             |  MPC control output
+      Row 4: Gateway dispatched cmds   |  Dispatch filtering delta
+      Row 5: MPC diagnostics           |  Compliance summary
     """
     t = data['time_h']
     x = data['x_hat']
     x_true = data['x_true']
     u = data['u']
     d = data['d']
+    dispatch = data.get('dispatch')
+    dispatch_labels = data.get('dispatch_labels', [])
 
     # Color palette
     C_ACTUAL = '#2196F3'      # blue
@@ -105,14 +114,14 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     C_CONTROL2 = '#FF9800'    # orange
     C_CONTROL3 = '#9C27B0'    # purple
     C_LIGHT_ON = '#FFF9C4'    # light yellow
-    C_LIGHT_OFF = '#E8EAF6'   # light blue-grey
     C_GRID = '#E0E0E0'
 
-    fig = plt.figure(figsize=(20, 16))
+    n_rows = 5 if dispatch is not None else 4
+    fig = plt.figure(figsize=(20, 4 * n_rows))
     fig.patch.set_facecolor('#FAFAFA')
 
-    gs = GridSpec(4, 2, figure=fig, hspace=0.28, wspace=0.25,
-                  left=0.06, right=0.97, top=0.93, bottom=0.05)
+    gs = GridSpec(n_rows, 2, figure=fig, hspace=0.28, wspace=0.25,
+                  left=0.06, right=0.97, top=0.93, bottom=0.04)
 
     # Helper: shade light on/off periods
     def shade_lights(ax, t_hours, d_array):
@@ -148,14 +157,13 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     ax1.plot(t, x_true[:, 0], color=C_TRUE, linewidth=0.7, alpha=0.5, label='T_air (true)', zorder=2)
     ax1.plot(t, x[:, 3], color='#FF7043', linewidth=0.8, label='T_leaf', zorder=3)
     ax1.plot(t, data['t_target'], color=C_TARGET, linewidth=1.5, linestyle='--', label='Target', zorder=4)
-    # Tolerance band
     tol = 1.0
     ax1.fill_between(t, data['t_target'] - tol, data['t_target'] + tol,
-                      color=C_TOLERANCE, alpha=0.3, zorder=1, label=f'±{tol}°C')
+                      color=C_TOLERANCE, alpha=0.3, zorder=1, label=f'\u00b1{tol}\u00b0C')
     ax1.plot(t, x[:, 6], color='#795548', linewidth=0.6, alpha=0.6, label='T_wall')
     ax1.legend(loc='upper right', fontsize=8, ncol=3)
     ax1.set_title('Temperature Tracking', fontsize=13, fontweight='bold', pad=6)
-    style_axis(ax1, 'Temperature (°C)')
+    style_axis(ax1, 'Temperature (\u00b0C)')
 
     # ===== Panel 2: VPD =====
     ax2 = fig.add_subplot(gs[0, 1])
@@ -164,7 +172,7 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     ax2.plot(t, data['vpd_target'], color=C_TARGET, linewidth=1.5, linestyle='--', label='Target', zorder=4)
     tol_vpd = 0.15
     ax2.fill_between(t, data['vpd_target'] - tol_vpd, data['vpd_target'] + tol_vpd,
-                      color=C_TOLERANCE, alpha=0.3, zorder=1, label=f'±{tol_vpd} kPa')
+                      color=C_TOLERANCE, alpha=0.3, zorder=1, label=f'\u00b1{tol_vpd} kPa')
     ax2.legend(loc='upper right', fontsize=8)
     ax2.set_title('VPD Tracking', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax2, 'VPD (kPa)')
@@ -199,31 +207,70 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     # ===== Panel 5: Substrate Water =====
     ax5 = fig.add_subplot(gs[2, 0])
     shade_lights(ax5, t, d)
-    ax5.plot(t, x[:, 4], color=C_ACTUAL, linewidth=1.2, label='θ (EKF)', zorder=3)
-    ax5.plot(t, x_true[:, 4], color=C_TRUE, linewidth=0.7, alpha=0.5, label='θ (true)', zorder=2)
+    ax5.plot(t, x[:, 4], color=C_ACTUAL, linewidth=1.2, label='\u03b8 (EKF)', zorder=3)
+    ax5.plot(t, x_true[:, 4], color=C_TRUE, linewidth=0.7, alpha=0.5, label='\u03b8 (true)', zorder=2)
     ax5.plot(t, data['theta_target'], color=C_TARGET, linewidth=1.5, linestyle='--', label='Target', zorder=4)
     tol_th = 0.05
     ax5.fill_between(t, data['theta_target'] - tol_th, data['theta_target'] + tol_th,
                       color=C_TOLERANCE, alpha=0.3, zorder=1)
     ax5.legend(loc='upper right', fontsize=8)
     ax5.set_title('Substrate Water Content', fontsize=13, fontweight='bold', pad=6)
-    style_axis(ax5, 'θ (m³/m³)', show_xlabel=True)
+    style_axis(ax5, '\u03b8 (m\u00b3/m\u00b3)', show_xlabel=True)
 
     # ===== Panel 6: Control Actions =====
     ax6 = fig.add_subplot(gs[2, 1])
     shade_lights(ax6, t, d)
-    ax6.plot(t, u[:, 0], color=C_ACTUAL, linewidth=1.0, label='T_sp (°C)', zorder=3)
+    ax6.plot(t, u[:, 0], color=C_ACTUAL, linewidth=1.0, label='T_sp (\u00b0C)', zorder=3)
     ax6.plot(t, u[:, 1], color=C_CONTROL2, linewidth=1.0, label='RH_sp (%)', zorder=3)
     ax6.plot(t, u[:, 4], color=C_CONTROL, linewidth=0.8, label='Fan (%)', zorder=3)
     ax6.plot(t, u[:, 3], color=C_CONTROL3, linewidth=0.8, label='CO2 inj (%)', zorder=3)
     ax6.plot(t, u[:, 2], color='#00BCD4', linewidth=0.8, label='Humidifier (%)', zorder=3)
     ax6.plot(t, u[:, 5], color='#795548', linewidth=0.8, label='Irrigation (%)', zorder=3)
     ax6.legend(loc='upper right', fontsize=7, ncol=2)
-    ax6.set_title('Control Actions', fontsize=13, fontweight='bold', pad=6)
+    ax6.set_title('MPC Control Output', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax6, 'Setpoint / Output', show_xlabel=True)
 
-    # ===== Panel 7: MPC Diagnostics =====
-    ax7 = fig.add_subplot(gs[3, 0])
+    # ===== Panel 7: Gateway Dispatched Commands =====
+    next_row = 3
+    if dispatch is not None:
+        ax_gw = fig.add_subplot(gs[next_row, 0])
+        shade_lights(ax_gw, t, d)
+        t_disp = t[:len(dispatch)]
+
+        gw_colors = {
+            'cool': C_ACTUAL, 'heat': C_CONTROL2, 'co2': C_CONTROL3,
+            'humidifier': '#00BCD4', 'fan': C_CONTROL, 'irrigation': '#795548',
+        }
+        gw_labels = {
+            'cool': 'Cool', 'heat': 'Heat', 'co2': 'CO2 inj',
+            'humidifier': 'Humidifier', 'fan': 'Fan', 'irrigation': 'Irrigation',
+        }
+        for i, name in enumerate(dispatch_labels):
+            ax_gw.plot(t_disp, dispatch[:, i],
+                       color=gw_colors.get(name, '#666'),
+                       linewidth=1.0, label=gw_labels.get(name, name), zorder=3)
+        ax_gw.legend(loc='upper right', fontsize=7, ncol=2)
+        ax_gw.set_title('Gateway Dispatched Commands', fontsize=13, fontweight='bold', pad=6)
+        style_axis(ax_gw, 'Command Value', show_xlabel=True)
+
+        ax_gw_r = fig.add_subplot(gs[next_row, 1])
+        shade_lights(ax_gw_r, t, d)
+        # Show dispatch delta: difference between MPC raw and gateway output
+        mpc_mapped = [u[:, 0], u[:, 1], u[:, 3], u[:, 2], u[:, 4], u[:, 5]]
+        for i, name in enumerate(dispatch_labels):
+            delta = mpc_mapped[i][:len(dispatch)] - dispatch[:, i]
+            ax_gw_r.plot(t_disp, delta,
+                         color=gw_colors.get(name, '#666'),
+                         linewidth=0.8, label=gw_labels.get(name, name), zorder=3)
+        ax_gw_r.axhline(0, color='#999', linewidth=0.5, linestyle='-', zorder=1)
+        ax_gw_r.legend(loc='upper right', fontsize=7, ncol=2)
+        ax_gw_r.set_title('Dispatch Filtering (MPC - Gateway)', fontsize=13, fontweight='bold', pad=6)
+        style_axis(ax_gw_r, 'Filtered Amount', show_xlabel=True)
+
+        next_row += 1
+
+    # ===== MPC Diagnostics =====
+    ax7 = fig.add_subplot(gs[next_row, 0])
     ax7_inn = ax7.twinx()
     ln1 = ax7.plot(t, data['solve_ms'], color=C_ACTUAL, linewidth=0.8, label='Solve time (ms)', zorder=3)
     ax7.axhline(100, color=C_TARGET, linewidth=1, linestyle='--', alpha=0.5, label='Budget (100ms)')
@@ -236,8 +283,8 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     ax7_inn.set_ylabel('Innovation RMS', fontsize=10, color=C_CONTROL2)
     ax7_inn.tick_params(labelsize=9, colors=C_CONTROL2)
 
-    # ===== Panel 8: Compliance Summary =====
-    ax8 = fig.add_subplot(gs[3, 1])
+    # ===== Compliance Summary =====
+    ax8 = fig.add_subplot(gs[next_row, 1])
     ax8.set_facecolor('white')
 
     if compliance_report:
@@ -264,7 +311,7 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
 
     # Title
     hours = duration_s / 3600
-    fig.suptitle(f'Cortex MPC — {hours:.0f}h Simulation', fontsize=18,
+    fig.suptitle(f'Cortex MPC \u2014 {hours:.0f}h Simulation', fontsize=18,
                  fontweight='bold', y=0.97)
 
     # Save
@@ -272,70 +319,3 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     fig.savefig(output_path, dpi=150, bbox_inches='tight', facecolor=fig.get_facecolor())
     plt.close(fig)
     print(f'Chart saved to {output_path}')
-
-
-def run_and_visualize(duration_s, output_path, config_dir='config'):
-    """Run simulation and generate charts."""
-    print(f'Building {duration_s}s simulation...')
-    loop, sim_room, compliance = build_simulation(
-        config_dir=config_dir, duration_s=duration_s,
-    )
-
-    recorder = TelemetryRecorder()
-    report_interval = max(1, duration_s // 40)
-
-    def telemetry_cb(x_hat, u, derived, info):
-        # Get reference targets
-        current_time = info['time_s']
-        ref = loop.reference.generate(
-            current_time, loop.light_schedule, horizon_steps=1, step_s=60.0
-        )
-        ref_targets = {
-            'VPD': ref[0, 0], 'T': ref[0, 1],
-            'CO2': ref[0, 2], 'theta': ref[0, 4],
-        }
-        recorder.record(x_hat, u, derived, info, sim_room, ref_targets)
-
-        tick = info['tick']
-        if tick % report_interval == 0:
-            hours = current_time / 3600.0
-            print(f'  [{hours:6.1f}h] T={x_hat[0]:.1f}°C  '
-                  f'VPD={derived["VPD"]:.2f}kPa  '
-                  f'CO2={x_hat[2]:.0f}ppm  '
-                  f'θ={x_hat[4]:.3f}  '
-                  f'solve={info["solve_ms"]:.0f}ms')
-
-    loop.set_telemetry_callback(telemetry_cb)
-
-    print('Running simulation...')
-    t0 = time.perf_counter()
-    loop.run_sync(duration_s, realtime=False)
-    elapsed = time.perf_counter() - t0
-
-    print(f'\n{loop.tick_count} ticks in {elapsed:.1f}s '
-          f'({loop.tick_count / elapsed:.0f} ticks/s)')
-
-    report = compliance.report()
-    print('\nCompliance:')
-    for key, dat in report.items():
-        print(f'  {key}: {dat["compliance_pct"]:.1f}%')
-
-    print('\nGenerating charts...')
-    data = recorder.to_arrays()
-    plot_simulation(data, report, duration_s, output_path)
-
-
-def main():
-    parser = argparse.ArgumentParser(description='Cortex simulation visualization')
-    parser.add_argument('--duration', type=int, default=14400,
-                        help='Simulation duration in seconds (default: 4h)')
-    parser.add_argument('--output', type=str, default='output/simulation.png',
-                        help='Output chart path')
-    parser.add_argument('--config', type=str, default='config')
-    args = parser.parse_args()
-
-    run_and_visualize(args.duration, args.output, args.config)
-
-
-if __name__ == '__main__':
-    main()

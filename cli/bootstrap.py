@@ -33,16 +33,24 @@ def make_redis(host='localhost', port=6379, db=0, decode_responses=True):
     return r
 
 
+def build_registry(configs, profile_override=None):
+    """Build ActuatorRegistry from configs."""
+    from core.actuators.factory import build_registry as _build
+    return _build(configs['equipment'], configs['room'],
+                  profile_override=profile_override)
+
+
 def build_shared_params():
     """Create initial CalibrationParams + SharedParams."""
     from calibration.params import CalibrationParams, SharedParams
     return SharedParams(CalibrationParams())
 
 
-def build_dynamics(configs, shared_params):
+def build_dynamics(configs, shared_params, registry):
     """Build GrowRoomDynamics from configs."""
     from core.dynamics import GrowRoomDynamics
-    return GrowRoomDynamics(configs['room'], configs['equipment'], shared_params)
+    return GrowRoomDynamics(configs['room'], configs['equipment'],
+                            shared_params, registry=registry)
 
 
 def build_ekf(dynamics):
@@ -54,12 +62,12 @@ def build_ekf(dynamics):
     return ekf
 
 
-def build_mpc(dynamics, shared_params, configs):
+def build_mpc(dynamics, shared_params, registry, configs):
     """Build the MPC solver."""
     from mpc.solver import MPCSolver
     from mpc.constraints import ConstraintBuilder
-    constraints = ConstraintBuilder(configs['equipment'])
-    return MPCSolver(dynamics, shared_params, Np=60, Nc=15,
+    constraints = ConstraintBuilder(registry)
+    return MPCSolver(dynamics, shared_params, registry, Np=60, Nc=15,
                      constraints=constraints)
 
 
@@ -95,17 +103,17 @@ def build_failsafe():
     return FailSafeManager()
 
 
-def build_simulation_io(configs):
+def build_simulation_io(configs, registry):
     """Build SimulatedRoom + SimulatedIO. Returns (io, sim_room)."""
     from simulation.room import SimulatedRoom
     from control.io import SimulatedIO
     sim_room = SimulatedRoom(configs['room'], configs['equipment'],
-                             noise_seed=42)
+                              registry, noise_seed=42)
     io = SimulatedIO(sim_room)
     return io, sim_room
 
 
-def build_real_io(redis_client, room_id='room1'):
+def build_real_io(redis_client, registry, room_id='room1'):
     """Build RealIO for production."""
     from control.io import RealIO
-    return RealIO(redis_client, room_id=room_id)
+    return RealIO(redis_client, registry, room_id=room_id)

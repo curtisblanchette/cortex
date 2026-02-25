@@ -1,7 +1,7 @@
 """IO adapter pattern — same controller, two backends.
 
 IOInterface is the abstract base. Both RealIO (production) and
-SimulatedIO (testing) implement it. The ControlLoop doesn't know
+SimulatedIO (testing) implement it. The SolverProcess doesn't know
 which backend it's talking to.
 """
 
@@ -68,9 +68,10 @@ class RealIO(IOInterface):
     Requires redis, paho-mqtt, and pymodbus at runtime.
     """
 
-    def __init__(self, redis_client, mqtt_client=None, modbus_client=None,
-                 room_id='room1'):
+    def __init__(self, redis_client, registry, mqtt_client=None,
+                 modbus_client=None, room_id='room1'):
         self.redis = redis_client
+        self.registry = registry
         self.mqtt = mqtt_client
         self.modbus = modbus_client
         self.room_id = room_id
@@ -93,14 +94,10 @@ class RealIO(IOInterface):
     def write_actuators(self, u: np.ndarray):
         # Write to Redis for MQTT bridge to pick up
         cmd_key = f'commands:{self.room_id}:latest'
-        self.redis.hset(cmd_key, mapping={
-            'T_sp': float(u[0]),
-            'RH_sp': float(u[1]),
-            'u_hum': float(u[2]),
-            'u_co2': float(u[3]),
-            'u_fan': float(u[4]),
-            'u_irr': float(u[5]),
-        })
+        mapping = {}
+        for i, io_map in enumerate(self.registry.all_io_mappings()):
+            mapping[io_map.io_field] = float(u[i])
+        self.redis.hset(cmd_key, mapping=mapping)
 
     def get_disturbance(self) -> np.ndarray:
         # Light schedule is deterministic, outdoor from sensor or API
@@ -115,8 +112,8 @@ class RealIO(IOInterface):
                 float(data.get(b'N_plants', 100)),
                 float(data.get(b'phase', 3)),
             ])
-        from core.dynamics import GrowRoomDynamics
-        return GrowRoomDynamics.default_disturbance()
+        # Fallback: typical mid-flower day disturbance
+        return np.array([30000.0, 28.0, 12.0, 100.0, 3.0])
 
     def get_time(self) -> float:
         import time

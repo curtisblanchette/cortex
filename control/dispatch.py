@@ -190,29 +190,6 @@ class DispatchRule:
         )
 
 
-# MPC control vector index → actuator name mapping
-# u[0] T_sp → cool/heat, u[1] RH_sp → humidifier (indirect),
-# u[2] u_hum, u[3] u_co2, u[4] u_fan, u[5] u_irr
-SETPOINT_TO_ACTUATOR = {
-    'u_T_sp': 'cool',
-    'u_RH_sp': 'heat',
-    'u_co2': 'co2',
-    'u_hum': 'humidifier',
-    'u_fan': 'fan',
-    'u_irr': 'irrigation',
-}
-
-# Maps MPC control vector indices to Redis solution field names
-CONTROL_INDEX_TO_FIELD = {
-    0: 'u_T_sp',
-    1: 'u_RH_sp',
-    2: 'u_hum',
-    3: 'u_co2',
-    4: 'u_fan',
-    5: 'u_irr',
-}
-
-
 def load_dispatch_rules(dispatch_config):
     """Load dispatch rules from config dict.
 

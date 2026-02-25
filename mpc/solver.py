@@ -16,7 +16,7 @@ import osqp
 from osqp import SolverStatus
 from scipy import sparse
 
-from core.dynamics import GrowRoomDynamics, N_STATES, N_CONTROLS, N_DISTURBANCES
+from core.dynamics import GrowRoomDynamics, N_STATES, N_DISTURBANCES
 from .constraints import ConstraintBuilder
 
 
@@ -34,13 +34,14 @@ class MPCSolver:
         Nc = 15: Control horizon (15 min, then hold last value)
     """
 
-    def __init__(self, dynamics, shared_params, Np=60, Nc=15,
+    def __init__(self, dynamics, shared_params, registry, Np=60, Nc=15,
                  constraints=None, step_s=60.0):
         """Initialize MPC solver.
 
         Args:
             dynamics: GrowRoomDynamics instance.
             shared_params: SharedParams or CalibrationParams.
+            registry: ActuatorRegistry instance.
             Np: Prediction horizon steps.
             Nc: Control horizon steps.
             constraints: ConstraintBuilder instance.
@@ -48,14 +49,15 @@ class MPCSolver:
         """
         self.dynamics = dynamics
         self.shared_params = shared_params
+        self.registry = registry
         self.Np = Np
         self.Nc = Nc
         self.n_x = N_STATES
-        self.n_u = N_CONTROLS
+        self.n_u = registry.n_u
         self.n_y = N_OUTPUTS
         self.step_s = step_s
 
-        self.constraints = constraints or ConstraintBuilder()
+        self.constraints = constraints or ConstraintBuilder(registry)
 
         # QP solver instance (created on first solve, reused via update())
         self._solver = None
@@ -106,15 +108,15 @@ class MPCSolver:
         params = self._get_params()
 
         if u_prev is None:
-            u_prev = GrowRoomDynamics.default_control()
+            u_prev = self.registry.default_control()
 
         # Default weights
         if Q_diag is None:
             Q_diag = np.array([10.0, 5.0, 1.0, 3.0, 2.0])
         if R_diag is None:
-            R_diag = np.array([0.1, 0.1, 0.5, 0.3, 0.2, 1.0])
+            R_diag = self.registry.default_R_diag
         if S_diag is None:
-            S_diag = np.array([1.0, 1.0, 0.5, 0.3, 0.5, 2.0])
+            S_diag = self.registry.default_S_diag
 
         # Linearize around current operating point
         u0 = u_prev

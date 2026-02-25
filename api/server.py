@@ -23,7 +23,7 @@ def create_api(control_loop=None, compliance=None, shared_params=None,
         Pass redis_client and room_id. Endpoints read from Redis keys.
 
     Args:
-        control_loop: ControlLoop or SolverProcess instance (in-process).
+        control_loop: SolverProcess instance (in-process).
         compliance: ComplianceTracker instance (in-process).
         shared_params: SharedParams instance (in-process).
         calibrator: ModelCalibrator instance (in-process).

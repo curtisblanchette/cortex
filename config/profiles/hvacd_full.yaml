@@ -1,0 +1,8 @@
+profile:
+  name: hvacd_full
+  actuators:
+    - hvacd
+    - humidifier
+    - co2_injector
+    - fan
+    - irrigation

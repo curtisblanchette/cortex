@@ -32,9 +32,10 @@ def run(args):
     from calibration.calibrator import ModelCalibrator
     from api.server import create_api
     from cli.bootstrap import (
-        load_configs, make_redis, build_shared_params, build_dynamics,
-        build_ekf, build_mpc, build_reference, build_light_schedule,
-        build_forecast, build_compliance, build_failsafe, build_real_io,
+        load_configs, make_redis, build_registry, build_shared_params,
+        build_dynamics, build_ekf, build_mpc, build_reference,
+        build_light_schedule, build_forecast, build_compliance,
+        build_failsafe, build_real_io,
     )
     from cli.commands.gateway import RedisSolutionReader
     from cli.commands.calibrator import RedisTelemetrySource
@@ -48,11 +49,12 @@ def run(args):
     print("[Cortex] Redis connected.")
 
     configs = load_configs(args.config)
+    registry = build_registry(configs)
     shared_params = build_shared_params()
-    dynamics = build_dynamics(configs, shared_params)
-    io = build_real_io(redis_client, room_id=args.room_id)
+    dynamics = build_dynamics(configs, shared_params, registry)
+    io = build_real_io(redis_client, registry, room_id=args.room_id)
     ekf = build_ekf(dynamics)
-    mpc = build_mpc(dynamics, shared_params, configs)
+    mpc = build_mpc(dynamics, shared_params, registry, configs)
     reference = build_reference(configs)
     light_schedule = build_light_schedule(configs)
     forecast = build_forecast(configs)
@@ -70,6 +72,7 @@ def run(args):
         failsafe=failsafe,
         shared_params=shared_params,
         light_schedule=light_schedule,
+        registry=registry,
         redis_client=redis_client,
         room_id=args.room_id,
         compliance=compliance,
@@ -81,6 +84,7 @@ def run(args):
     gw = ActuatorGateway(
         solution_store=solution_reader,
         dispatch_config=dispatch_config,
+        registry=registry,
         redis_client=redis_client,
         light_schedule=light_schedule,
         room_id=args.room_id,

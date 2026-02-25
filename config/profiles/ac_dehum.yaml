@@ -1,0 +1,9 @@
+profile:
+  name: ac_dehum
+  actuators:
+    - standalone_ac
+    - standalone_dehumidifier
+    - humidifier
+    - co2_injector
+    - fan
+    - irrigation

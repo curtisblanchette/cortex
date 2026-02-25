@@ -4,7 +4,7 @@ import asyncio
 import signal
 import sys
 
-from cli.bootstrap import load_configs, make_redis, build_light_schedule
+from cli.bootstrap import load_configs, make_redis, build_registry, build_light_schedule
 
 
 class RedisSolutionReader:
@@ -61,6 +61,7 @@ def run(args):
     print("[Cortex] Redis connected.")
 
     configs = load_configs(args.config)
+    registry = build_registry(configs)
     light_schedule = build_light_schedule(configs)
     dispatch_config = configs['equipment'].get('dispatch', {})
 
@@ -69,6 +70,7 @@ def run(args):
     gw = ActuatorGateway(
         solution_store=solution_reader,
         dispatch_config=dispatch_config,
+        registry=registry,
         redis_client=redis_client,
         light_schedule=light_schedule,
         room_id=args.room_id,

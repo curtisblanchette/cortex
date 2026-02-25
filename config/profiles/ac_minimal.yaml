@@ -1,0 +1,6 @@
+profile:
+  name: ac_minimal
+  actuators:
+    - standalone_ac
+    - co2_injector
+    - fan

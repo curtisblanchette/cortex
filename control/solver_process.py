@@ -22,7 +22,6 @@ from datetime import datetime, timezone
 
 import numpy as np
 
-from core.dynamics import GrowRoomDynamics
 from estimation.ekf import StateEstimator
 from mpc.solver import MPCSolver
 from mpc.reference import ReferenceGenerator, LightSchedule
@@ -59,12 +58,11 @@ class SolverProcess:
 
     In simulation mode, still uses the IO interface for sensor data
     and drives the simulation forward by calling write_actuators().
-    The key change from ControlLoop is that the SOLVE CADENCE is
-    decoupled from the actuation cadence.
+    The solve cadence is decoupled from the actuation cadence.
     """
 
     def __init__(self, io, dynamics, ekf, mpc, reference, forecast,
-                 failsafe, shared_params, light_schedule,
+                 failsafe, shared_params, light_schedule, registry,
                  solution_store=None, redis_client=None,
                  room_id='room1', trigger_config=None,
                  compliance=None):
@@ -77,6 +75,7 @@ class SolverProcess:
         self.failsafe = failsafe
         self.shared_params = shared_params
         self.light_schedule = light_schedule or LightSchedule(6.0, 18.0)
+        self.registry = registry
         self.compliance = compliance
 
         # Solution output
@@ -88,7 +87,7 @@ class SolverProcess:
         self.trigger = SolveTrigger(trigger_config)
 
         # State
-        self.last_u = GrowRoomDynamics.default_control()
+        self.last_u = registry.default_control()
         self.solve_count = 0
         self.running = False
 
@@ -99,7 +98,7 @@ class SolverProcess:
         """Run one EKF + MPC cycle and publish the solution.
 
         Returns:
-            (x_hat, u_opt, trajectory, info) same as old ControlLoop.tick()
+            (x_hat, u_opt, trajectory, info)
         """
         t_start = time.perf_counter()
 
@@ -215,18 +214,17 @@ class SolverProcess:
             if 'error' in status:
                 status = 'failed'
 
-        return {
+        # Build setpoint fields dynamically from registry
+        setpoints = {}
+        idx_to_field = self.registry.index_to_solution_field()
+        for idx, field_name in idx_to_field.items():
+            setpoints[field_name] = round(float(u[idx]), 2)
+
+        solution = {
             'timestamp': now_iso,
             'solve_id': self.solve_count,
             'status': status,
-
-            # Optimal setpoints
-            'u_T_sp': round(float(u[0]), 2),
-            'u_RH_sp': round(float(u[1]), 2),
-            'u_co2': round(float(u[3]), 2),
-            'u_hum': round(float(u[2]), 2),
-            'u_fan': round(float(u[4]), 2),
-            'u_irr': round(float(u[5]), 2),
+            **setpoints,
 
             # State estimate
             'x_hat': json.dumps([round(float(v), 3) for v in x_hat]),
@@ -250,6 +248,8 @@ class SolverProcess:
             # Simulation time (for sim mode coordination)
             'sim_time': round(sim_time, 1),
         }
+
+        return solution
 
     def _publish_to_redis(self, solution):
         """Publish solution to Redis hash with TTL.

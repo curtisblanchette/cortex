@@ -3,9 +3,9 @@
 import time
 
 from cli.bootstrap import (
-    load_configs, build_shared_params, build_dynamics, build_ekf,
-    build_mpc, build_reference, build_light_schedule, build_forecast,
-    build_compliance, build_failsafe, build_simulation_io,
+    load_configs, build_registry, build_shared_params, build_dynamics,
+    build_ekf, build_mpc, build_reference, build_light_schedule,
+    build_forecast, build_compliance, build_failsafe, build_simulation_io,
 )
 
 
@@ -13,71 +13,40 @@ def register(subparsers):
     p = subparsers.add_parser('simulate', help='Run in-process simulation')
     p.add_argument('--fast', action='store_true',
                    help='Fast-forward (no sleep)')
-    p.add_argument('--legacy', action='store_true',
-                   help='Use legacy coupled control loop')
     p.add_argument('--duration', type=int, default=86400,
                    help='Simulation duration in seconds')
     p.add_argument('--config', type=str, default='config',
                    help='Config directory')
+    p.add_argument('--profile', type=str, default=None,
+                   help='Equipment profile override (e.g. ac_dehum, ac_minimal)')
+    p.add_argument('--chart', action='store_true',
+                   help='Generate visualization chart on completion')
+    p.add_argument('--chart-output', type=str, default='output/simulation.png',
+                   help='Output path for chart (default: output/simulation.png)')
     p.set_defaults(func=run)
 
 
 def run(args):
-    if args.legacy:
-        _run_legacy(args)
-    else:
-        _run_decoupled(args)
+    _run_decoupled(args)
 
 
-def _run_legacy(args):
-    """Run the legacy coupled control loop."""
-    from control.loop import ControlLoop
+def _maybe_recorder(args, registry=None):
+    """Create a TelemetryRecorder if --chart was requested."""
+    if not args.chart:
+        return None
+    from cli.visualization import TelemetryRecorder
+    return TelemetryRecorder(registry=registry)
 
-    print(f"[Cortex] Starting LEGACY simulation "
-          f"({args.duration}s, fast={args.fast})")
 
-    configs = load_configs(args.config)
-    shared_params = build_shared_params()
-    dynamics = build_dynamics(configs, shared_params)
-    io, sim_room = build_simulation_io(configs)
-    ekf = build_ekf(dynamics)
-    mpc = build_mpc(dynamics, shared_params, configs)
-    reference = build_reference(configs)
-    light_schedule = build_light_schedule(configs)
-    forecast = build_forecast(configs)
-    compliance = build_compliance(configs)
-    failsafe = build_failsafe()
-
-    loop = ControlLoop(
-        io=io,
-        dynamics=dynamics,
-        ekf=ekf,
-        mpc=mpc,
-        reference=reference,
-        forecast=forecast,
-        compliance=compliance,
-        failsafe=failsafe,
-        shared_params=shared_params,
-        light_schedule=light_schedule,
-    )
-
-    report_interval = max(1, args.duration // 20)
-
-    def telemetry_cb(x_hat, u, derived, info):
-        tick = info['tick']
-        if tick % report_interval == 0:
-            hours = info['time_s'] / 3600.0
-            print(f"  [{hours:6.1f}h] T={x_hat[0]:.1f}\u00b0C  "
-                  f"RH={derived['RH']:.0f}%  VPD={derived['VPD']:.2f}kPa  "
-                  f"CO2={x_hat[2]:.0f}ppm  \u03b8={x_hat[4]:.3f}  "
-                  f"solve={info['solve_ms']:.1f}ms  {info['failsafe_level']}")
-
-    loop.set_telemetry_callback(telemetry_cb)
-
-    print("[Cortex] Running control loop...")
-    loop.run_sync(args.duration, realtime=not args.fast)
-
-    _print_compliance(compliance)
+def _maybe_chart(args, recorder, compliance):
+    """Generate the chart if --chart was requested."""
+    if not args.chart or recorder is None:
+        return
+    from cli.visualization import plot_simulation
+    print("\n[Cortex] Generating chart...")
+    data = recorder.to_arrays()
+    report = compliance.report()
+    plot_simulation(data, report, args.duration, args.chart_output)
 
 
 def _run_decoupled(args):
@@ -85,15 +54,18 @@ def _run_decoupled(args):
     from control.solver_process import SolverProcess, SolutionStore
     from control.gateway import ActuatorGateway
 
+    profile = getattr(args, 'profile', None)
     print(f"[Cortex] Starting DECOUPLED simulation "
-          f"({args.duration}s, fast={args.fast})")
+          f"({args.duration}s, fast={args.fast}"
+          f"{f', profile={profile}' if profile else ''})")
 
     configs = load_configs(args.config)
+    registry = build_registry(configs, profile_override=profile)
     shared_params = build_shared_params()
-    dynamics = build_dynamics(configs, shared_params)
-    io, sim_room = build_simulation_io(configs)
+    dynamics = build_dynamics(configs, shared_params, registry)
+    io, sim_room = build_simulation_io(configs, registry)
     ekf = build_ekf(dynamics)
-    mpc = build_mpc(dynamics, shared_params, configs)
+    mpc = build_mpc(dynamics, shared_params, registry, configs)
     reference = build_reference(configs)
     light_schedule = build_light_schedule(configs)
     forecast = build_forecast(configs)
@@ -112,6 +84,7 @@ def _run_decoupled(args):
         failsafe=failsafe,
         shared_params=shared_params,
         light_schedule=light_schedule,
+        registry=registry,
         solution_store=solution_store,
         compliance=compliance,
     )
@@ -120,21 +93,32 @@ def _run_decoupled(args):
     gateway = ActuatorGateway(
         solution_store=solution_store,
         dispatch_config=dispatch_config,
+        registry=registry,
         light_schedule=light_schedule,
     )
 
+    recorder = _maybe_recorder(args, registry=registry)
     report_interval = max(1, args.duration // 20)
     dispatch_summary = {'total': 0, 'dispatched': 0, 'held': 0}
 
     def telemetry_cb(x_hat, u, derived, info):
+        if recorder:
+            ref = reference.generate(
+                info['time_s'], light_schedule, horizon_steps=1, step_s=60.0)
+            ref_targets = {
+                'VPD': ref[0, 0], 'T': ref[0, 1],
+                'CO2': ref[0, 2], 'theta': ref[0, 4],
+            }
+            recorder.record(x_hat, u, derived, info, sim_room, ref_targets)
+
         tick = info['tick']
         if tick % report_interval == 0:
             hours = info['time_s'] / 3600.0
             pct = (dispatch_summary['dispatched'] /
                    max(1, dispatch_summary['total'])) * 100
-            print(f"  [{hours:6.1f}h] T={x_hat[0]:.1f}\u00b0C  "
+            print(f"  [{hours:6.1f}h] T={x_hat[0]:.1f}C  "
                   f"RH={derived['RH']:.0f}%  VPD={derived['VPD']:.2f}kPa  "
-                  f"CO2={x_hat[2]:.0f}ppm  \u03b8={x_hat[4]:.3f}  "
+                  f"CO2={x_hat[2]:.0f}ppm  theta={x_hat[4]:.3f}  "
                   f"solve={info['solve_ms']:.1f}ms  "
                   f"dispatch={pct:.0f}%  {info['failsafe_level']}")
 
@@ -160,6 +144,9 @@ def _run_decoupled(args):
                 else:
                     dispatch_summary['held'] += 1
 
+            if recorder and decisions:
+                recorder.record_dispatch(decisions)
+
             solver.io.write_actuators(solver.last_u)
 
         except Exception as e:
@@ -171,6 +158,7 @@ def _run_decoupled(args):
 
     _print_compliance(compliance)
     _print_dispatch_summary(dispatch_summary, gateway)
+    _maybe_chart(args, recorder, compliance)
 
 
 def _print_compliance(compliance):

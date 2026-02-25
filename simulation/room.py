@@ -9,7 +9,7 @@ Uses the SAME GrowRoomDynamics as production, but:
 
 import numpy as np
 
-from core.dynamics import GrowRoomDynamics, N_STATES, N_CONTROLS, N_DISTURBANCES
+from core.dynamics import GrowRoomDynamics, N_STATES, N_DISTURBANCES
 from calibration.params import CalibrationParams
 from .noise import SensorNoiseModel, N_MEASUREMENTS
 from .disturbance import DisturbanceScheduler
@@ -22,7 +22,8 @@ class SimulatedRoom:
     same interface as real hardware via the IO adapter pattern.
     """
 
-    def __init__(self, room_config, equipment_config, initial_state=None,
+    def __init__(self, room_config, equipment_config, registry,
+                 initial_state=None,
                  sim_params=None, noise_seed=None, max_steps=86400,
                  start_time_s=None):
         """Initialize simulated room.
@@ -30,6 +31,7 @@ class SimulatedRoom:
         Args:
             room_config: Room configuration dict (from room.yaml).
             equipment_config: Equipment configuration dict (from equipment.yaml).
+            registry: ActuatorRegistry instance.
             initial_state: Initial state vector (7,). If None, uses defaults.
             sim_params: CalibrationParams for the "true" room physics.
                        Can differ from controller's params to test robustness.
@@ -38,7 +40,9 @@ class SimulatedRoom:
             start_time_s: Simulation start time in seconds (default: light on_hour).
         """
         self.params = sim_params or CalibrationParams()
-        self.dynamics = GrowRoomDynamics(room_config, equipment_config, self.params)
+        self.registry = registry
+        self.dynamics = GrowRoomDynamics(room_config, equipment_config,
+                                         self.params, registry=registry)
 
         # The "true" state of the room (controller never sees this directly)
         if initial_state is not None:
@@ -65,7 +69,7 @@ class SimulatedRoom:
         self._hist_time = np.empty(max_steps, dtype=np.float64)
         self._hist_x = np.empty((max_steps, N_STATES), dtype=np.float64)
         self._hist_z = np.empty((max_steps, N_MEASUREMENTS), dtype=np.float64)
-        self._hist_u = np.empty((max_steps, N_CONTROLS), dtype=np.float64)
+        self._hist_u = np.empty((max_steps, registry.n_u), dtype=np.float64)
         self._hist_d = np.empty((max_steps, N_DISTURBANCES), dtype=np.float64)
 
     @property

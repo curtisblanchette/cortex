@@ -21,7 +21,6 @@ from datetime import datetime, timezone
 
 from control.dispatch import (
     DispatchRule, ActuatorState, DispatchResult, DispatchAction,
-    SETPOINT_TO_ACTUATOR, CONTROL_INDEX_TO_FIELD,
     load_dispatch_rules,
 )
 
@@ -39,7 +38,7 @@ class ActuatorGateway:
     In production mode, this is the sole writer to hardware (MQTT/Modbus).
     """
 
-    def __init__(self, solution_store, dispatch_config,
+    def __init__(self, solution_store, dispatch_config, registry,
                  redis_client=None, mqtt_client=None, modbus_client=None,
                  room_id='room1', light_schedule=None,
                  stale_threshold_multiplier=2.0):
@@ -49,6 +48,7 @@ class ActuatorGateway:
         self.modbus = modbus_client
         self.room_id = room_id
         self.light_schedule = light_schedule
+        self.registry = registry
 
         # Load dispatch rules from config
         self.dispatch_rules = load_dispatch_rules(dispatch_config)
@@ -144,16 +144,12 @@ class ActuatorGateway:
     def _extract_setpoints(self, solution):
         """Extract actuator setpoints from an MPC solution dict.
 
-        Maps from MPC solution fields to actuator names.
+        Uses registry dispatch specs to map solution fields to actuator names.
         """
-        mapping = {
-            'cool': float(solution.get('u_T_sp', 24.0)),
-            'heat': float(solution.get('u_RH_sp', 55.0)),
-            'co2': float(solution.get('u_co2', 0.0)),
-            'humidifier': float(solution.get('u_hum', 0.0)),
-            'fan': float(solution.get('u_fan', 50.0)),
-            'irrigation': float(solution.get('u_irr', 0.0)),
-        }
+        mapping = {}
+        for spec in self.registry.all_dispatch_specs():
+            value = float(solution.get(spec.solution_field, spec.default_value))
+            mapping[spec.actuator_name] = value
         return mapping
 
     def read_solution(self):

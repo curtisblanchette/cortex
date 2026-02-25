@@ -1,3 +1,12 @@
+profile:
+  name: hvacd_full
+  actuators:
+    - hvacd
+    - humidifier
+    - co2_injector
+    - fan
+    - irrigation
+
 hvacd:
   model: "Desert Aire"
   mode: setpoint              # setpoint or direct

@@ -1,0 +1,7 @@
+profile:
+  name: hvacd_no_irr
+  actuators:
+    - hvacd
+    - humidifier
+    - co2_injector
+    - fan
