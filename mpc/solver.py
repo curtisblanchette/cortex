@@ -179,8 +179,9 @@ class MPCSolver:
                 'setup_time_ms': info.get('setup_time_ms', 0.0),
             }
 
-            # Extract first control move
-            u_opt = u_opt_seq[:self.n_u]
+            # Extract first control move and enforce mutual exclusivity
+            u_opt = u_opt_seq[:self.n_u].copy()
+            self.constraints.clamp_exclusive(u_opt)
 
             # Store for warm-starting
             self._prev_u = u_opt_seq
@@ -322,15 +323,22 @@ class MPCSolver:
                 du_lower[row_start:row_start + n_u] = self.constraints.du_min
                 du_upper[row_start:row_start + n_u] = self.constraints.du_max
 
-        # Stack all constraints
-        A_dense = np.vstack([
-            A_eq,                    # Equality (dynamics)
-            np.eye(n_dec),           # Variable bounds
-            A_du,                    # Rate constraints
-        ])
+        # Exclusive pair constraints (e.g., u_hum + u_dehum <= 100)
+        A_excl, l_excl, u_excl = self.constraints.get_exclusive_constraints(Nc, n_dec)
 
-        l_all = np.concatenate([b_eq, lb, du_lower])
-        u_all = np.concatenate([b_eq, ub, du_upper])
+        # Stack all constraints
+        blocks = [A_eq, np.eye(n_dec), A_du]
+        lowers = [b_eq, lb, du_lower]
+        uppers = [b_eq, ub, du_upper]
+
+        if len(l_excl) > 0:
+            blocks.append(A_excl)
+            lowers.append(l_excl)
+            uppers.append(u_excl)
+
+        A_dense = np.vstack(blocks)
+        l_all = np.concatenate(lowers)
+        u_all = np.concatenate(uppers)
 
         return P, q, A_dense, l_all, u_all
 
@@ -529,15 +537,13 @@ class MPCSolver:
         """Shift previous dual variables forward by one step.
 
         The dual (y) vector corresponds to constraints:
-            [dynamics (Np*n_x), bounds (n_dec), rate (Nc*n_u)]
-        Shift the dynamics block forward; bounds and rate blocks stay as-is.
+            [dynamics (Np*n_x), bounds (n_dec), rate (Nc*n_u), exclusive (n_excl*Nc)]
+        Shift the dynamics block forward; bounds, rate, and exclusive blocks stay as-is.
         """
         Np, Nc = self.Np, self.Nc
         n_x, n_u = self.n_x, self.n_u
-        n_dec = Nc * n_u + Np * n_x
 
         y = self._prev_y.copy()
-        n_eq = Np * n_x
 
         # Shift dynamics dual: [y_eq[1], ..., y_eq[Np-1], y_eq[Np-1]]
         for k in range(Np - 1):
@@ -545,7 +551,7 @@ class MPCSolver:
         # Last block repeats
         y[(Np - 1) * n_x:Np * n_x] = self._prev_y[(Np - 1) * n_x:Np * n_x]
 
-        # Bounds and rate duals (indices n_eq onward) are kept as-is
+        # Bounds, rate, and coupling duals (indices n_eq onward) are kept as-is
         return y
 
     def _build_structural_templates(self):
@@ -581,7 +587,8 @@ class MPCSolver:
         # --- A template ---
         n_eq = Np * n_x
         n_du = Nc * n_u
-        n_con = n_eq + n_dec + n_du
+        n_excl = self.constraints.n_exclusive * Nc
+        n_con = n_eq + n_dec + n_du + n_excl
         A = np.zeros((n_con, n_dec))
 
         # Dynamics rows
@@ -607,6 +614,15 @@ class MPCSolver:
             if k > 0:
                 ps = (k - 1) * n_u
                 A[rs:rs+n_u, ps:ps+n_u] = 1.0
+
+        # Exclusive pair rows: 1.0 at both channel columns for each pair per step
+        excl_base = n_eq + n_dec + n_du
+        row = excl_base
+        for idx_a, idx_b, _ in self.constraints.exclusive_pairs:
+            for k in range(Nc):
+                A[row, k * n_u + idx_a] = 1.0
+                A[row, k * n_u + idx_b] = 1.0
+                row += 1
 
         A_csc = sparse.csc_matrix(A)
 

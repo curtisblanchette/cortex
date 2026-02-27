@@ -4,6 +4,7 @@ Constructs bounds and inequality constraints for the OSQP solver:
   - State bounds (safety limits on temperature, humidity, CO2, etc.)
   - Control bounds (actuator min/max) — from ActuatorRegistry
   - Control rate-of-change bounds (du limits) — from ActuatorRegistry
+  - Exclusive pair constraints (e.g., humidifier + dehumidifier)
 """
 
 import numpy as np
@@ -34,6 +35,14 @@ class ConstraintBuilder:
     State bounds use sensible defaults.
     """
 
+    # Actuator pairs that should never run simultaneously.
+    # Enforced via linear constraint u_a + u_b <= max_sum in the QP,
+    # plus post-solve clamping to enforce true mutual exclusivity.
+    # Each tuple is (channel_a, channel_b, max_sum).
+    EXCLUSIVE_PAIRS = [
+        ('u_hum', 'u_dehum', 100.0),
+    ]
+
     def __init__(self, registry, equipment_config=None):
         """
         Args:
@@ -55,6 +64,13 @@ class ConstraintBuilder:
         self.du_min = registry.du_min.copy()
         self.du_max = registry.du_max.copy()
 
+        # Detect exclusive pairs present in this profile
+        names = registry.channel_names
+        self.exclusive_pairs = []  # list of (idx_a, idx_b, max_sum)
+        for ch_a, ch_b, max_sum in self.EXCLUSIVE_PAIRS:
+            if ch_a in names and ch_b in names:
+                self.exclusive_pairs.append((names.index(ch_a), names.index(ch_b), max_sum))
+
     def get_state_bounds(self, Np):
         """Get state bounds stacked over prediction horizon."""
         x_lb = np.tile(self.x_min, Np)
@@ -72,3 +88,51 @@ class ConstraintBuilder:
         du_lb = np.tile(self.du_min, Nc)
         du_ub = np.tile(self.du_max, Nc)
         return du_lb, du_ub
+
+    @property
+    def n_exclusive(self):
+        """Number of active exclusive pairs."""
+        return len(self.exclusive_pairs)
+
+    def get_exclusive_constraints(self, Nc, n_dec):
+        """Build exclusive pair inequality rows: u_a[k] + u_b[k] <= max_sum.
+
+        Returns:
+            A_excl: (n_exclusive * Nc, n_dec) constraint matrix.
+            l_excl: lower bounds (-inf).
+            u_excl: upper bounds (max_sum per row).
+        """
+        n_rows = self.n_exclusive * Nc
+        if n_rows == 0:
+            return np.zeros((0, n_dec)), np.zeros(0), np.zeros(0)
+
+        A_excl = np.zeros((n_rows, n_dec))
+        l_excl = np.full(n_rows, -np.inf)
+        u_excl = np.zeros(n_rows)
+
+        row = 0
+        for idx_a, idx_b, max_sum in self.exclusive_pairs:
+            for k in range(Nc):
+                col_a = k * self.n_u + idx_a
+                col_b = k * self.n_u + idx_b
+                A_excl[row, col_a] = 1.0
+                A_excl[row, col_b] = 1.0
+                u_excl[row] = max_sum
+                row += 1
+
+        return A_excl, l_excl, u_excl
+
+    def clamp_exclusive(self, u):
+        """Post-solve clamp: zero out the smaller actuator in each exclusive pair.
+
+        The QP constraint u_a + u_b <= 100 limits overlap but can't enforce
+        true mutual exclusivity (that's non-convex). This clamp enforces it
+        after the solve. The MPC re-solves every tick, so it adapts immediately.
+        """
+        for idx_a, idx_b, _ in self.exclusive_pairs:
+            if u[idx_a] > 0 and u[idx_b] > 0:
+                if u[idx_a] >= u[idx_b]:
+                    u[idx_b] = 0.0
+                else:
+                    u[idx_a] = 0.0
+        return u
