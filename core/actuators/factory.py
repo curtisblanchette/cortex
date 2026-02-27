@@ -22,6 +22,7 @@ PLUGIN_CLASSES = {
     'co2_injector': 'core.actuators.co2_plugin.CO2InjectorPlugin',
     'fan': 'core.actuators.fan_plugin.FanPlugin',
     'irrigation': 'core.actuators.irrigation_plugin.IrrigationPlugin',
+    'heater': 'core.actuators.heater_plugin.HeaterPlugin',
 }
 
 # Built-in profiles
@@ -31,7 +32,7 @@ PROFILES = {
     ],
     'ac_dehum': [
         'standalone_ac', 'standalone_dehumidifier', 'humidifier',
-        'co2_injector', 'fan', 'irrigation',
+        'heater', 'co2_injector', 'fan', 'irrigation',
     ],
     'ac_minimal': [
         'standalone_ac', 'co2_injector', 'fan',

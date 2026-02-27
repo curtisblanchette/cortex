@@ -38,9 +38,13 @@ class ConstraintBuilder:
     # Actuator pairs that should never run simultaneously.
     # Enforced via linear constraint u_a + u_b <= max_sum in the QP,
     # plus post-solve clamping to enforce true mutual exclusivity.
+    # max_sum=100 means the pair shares a 0-100% budget: if one runs
+    # at 80%, the other is capped at 20%. The post-solve clamp then
+    # zeros the smaller one for true mutual exclusivity.
     # Each tuple is (channel_a, channel_b, max_sum).
     EXCLUSIVE_PAIRS = [
         ('u_hum', 'u_dehum', 100.0),
+        ('u_heat', 'u_cool', 100.0),
     ]
 
     def __init__(self, registry, equipment_config=None):

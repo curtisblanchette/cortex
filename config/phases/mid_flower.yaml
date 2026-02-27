@@ -37,6 +37,7 @@ weights:
     T_sp: 0.1
     RH_sp: 0.1
     u_cool: 0.005
+    u_heat: 0.01
     u_dehum: 0.005
     u_hum: 0.005
     u_co2: 0.003
@@ -46,6 +47,7 @@ weights:
     T_sp: 1.0
     RH_sp: 1.0
     u_cool: 0.1           # allow faster cooling response
+    u_heat: 0.5
     u_dehum: 0.2
     u_hum: 0.1
     u_co2: 0.05
