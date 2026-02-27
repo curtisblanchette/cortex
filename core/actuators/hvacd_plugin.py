@@ -49,9 +49,25 @@ class HVACDPlugin(ActuatorPlugin):
         u_hvacd = np.array([u_local[0], u_local[1], 0.0, 0.0,
                             fan_pct * 100.0, 0.0])
 
-        Q_sens, Q_lat, w_removal, T_s_target = self.hvacd.compute_heat_exchange(
+        Q_sens, Q_lat, w_removal_model, T_s_target = self.hvacd.compute_heat_exchange(
             T_a, w_a, T_s, u_hvacd, params
         )
+
+        # Recompute moisture removal using room volume.
+        # HVACDModel divides by airflow mass (rho*airflow*1000) instead of
+        # room air mass (rho*V), making dehumidification ~5x too weak.
+        # Use the same formula as StandaloneDehumPlugin for consistency.
+        V = room_props['V']
+        rho_air = room_props.get('rho_air', 1.2)
+        RH_sp = min(max(u_local[1], self.hvacd.RH_sp_min), self.hvacd.RH_sp_max)
+        RH = self.hvacd._compute_rh(T_a, w_a)
+        RH_error = RH - RH_sp
+        if RH_error > 0:
+            dehum_fraction = min(RH_error / 20.0, 1.0)
+            dehum_L_hr = self.hvacd.dehum_max * dehum_fraction
+            w_removal = dehum_L_hr * 1000.0 / (rho_air * V) / 3600.0
+        else:
+            w_removal = 0.0
 
         return PhysicsEffect(
             Q_sensible=Q_sens,

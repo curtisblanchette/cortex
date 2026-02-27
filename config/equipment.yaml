@@ -11,7 +11,7 @@ hvacd:
   mode: setpoint
   cooling_capacity_W: 35000.0
   heating_capacity_W: 15000.0
-  dehumidification_L_hr: 8.0
+  dehumidification_L_hr: 15.0
   supply_airflow_cfm: 3000.0
   modbus_address: 1
   modbus_port: /dev/ttyUSB0
