@@ -50,7 +50,7 @@ def relative_humidity(T, w):
         Relative humidity in %.
     """
     w_sat = saturation_humidity(T)
-    return np.clip((w / w_sat) * 100.0, 0.0, 100.0)
+    return min(max((w / w_sat) * 100.0, 0.0), 100.0)
 
 
 def absolute_humidity_from_rh(T, RH):

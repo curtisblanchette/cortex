@@ -16,10 +16,11 @@ REF_T = 1
 REF_CO2 = 2
 REF_DRYBACK = 3
 REF_THETA = 4
+REF_RH = 5
 
-N_OUTPUTS = 5
+N_OUTPUTS = 6
 
-OUTPUT_NAMES = ['VPD', 'T', 'CO2', 'dryback_rate', 'theta']
+OUTPUT_NAMES = ['VPD', 'T', 'CO2', 'dryback_rate', 'theta', 'RH']
 
 
 class LightSchedule:
@@ -45,12 +46,14 @@ class ReferenceGenerator:
     Handles day/night transitions with configurable ramp rates.
     """
 
-    def __init__(self, phase_config, cultivar_config=None):
+    def __init__(self, phase_config, cultivar_config=None, registry=None):
         """Initialize from phase and cultivar configs.
 
         Args:
             phase_config: Dict from phases/*.yaml with day/night targets.
             cultivar_config: Dict from cultivar/*.yaml with offsets.
+            registry: ActuatorRegistry — used to build R/S weights that
+                      match the active profile's control vector layout.
         """
         self.n_outputs = N_OUTPUTS
 
@@ -64,6 +67,7 @@ class ReferenceGenerator:
             day.get('CO2_target', 1200.0),
             day.get('dryback_rate_target', 0.0),
             day.get('theta_target', 0.35),
+            day.get('RH_target', 60.0),
         ])
 
         self.night_targets = np.array([
@@ -72,6 +76,7 @@ class ReferenceGenerator:
             night.get('CO2_target', 800.0),
             night.get('dryback_rate_target', 0.002),
             night.get('theta_target', 0.30),
+            night.get('RH_target', 55.0),
         ])
 
         self.ramp_minutes = phase_config.get('ramp_minutes', 15)
@@ -95,27 +100,43 @@ class ReferenceGenerator:
             Q_weights.get('CO2', 1.0),
             Q_weights.get('dryback', 3.0),
             Q_weights.get('theta', 2.0),
+            Q_weights.get('RH', 5.0),
         ])
 
+        # Build R and S from registry channel order, with phase overrides
         R_weights = weights.get('R', {})
-        self.R_diag = np.array([
-            R_weights.get('T_sp', 0.1),
-            R_weights.get('RH_sp', 0.1),
-            R_weights.get('u_hum', 0.5),
-            R_weights.get('u_co2', 0.3),
-            R_weights.get('u_fan', 0.2),
-            R_weights.get('u_irr', 1.0),
-        ])
-
         S_weights = weights.get('S', {})
-        self.S_diag = np.array([
-            S_weights.get('T_sp', 1.0),
-            S_weights.get('RH_sp', 1.0),
-            S_weights.get('u_hum', 0.5),
-            S_weights.get('u_co2', 0.3),
-            S_weights.get('u_fan', 0.5),
-            S_weights.get('u_irr', 2.0),
-        ])
+
+        if registry is not None:
+            # Registry-aware: iterate actual channels, look up by name
+            R_defaults = registry.default_R_diag
+            S_defaults = registry.default_S_diag
+            self.R_diag = np.array([
+                R_weights.get(name, R_defaults[i])
+                for i, name in enumerate(registry.channel_names)
+            ])
+            self.S_diag = np.array([
+                S_weights.get(name, S_defaults[i])
+                for i, name in enumerate(registry.channel_names)
+            ])
+        else:
+            # Fallback for tests or standalone usage without registry
+            self.R_diag = np.array([
+                R_weights.get('T_sp', 0.1),
+                R_weights.get('RH_sp', 0.1),
+                R_weights.get('u_hum', 0.5),
+                R_weights.get('u_co2', 0.3),
+                R_weights.get('u_fan', 0.2),
+                R_weights.get('u_irr', 1.0),
+            ])
+            self.S_diag = np.array([
+                S_weights.get('T_sp', 1.0),
+                S_weights.get('RH_sp', 1.0),
+                S_weights.get('u_hum', 0.5),
+                S_weights.get('u_co2', 0.3),
+                S_weights.get('u_fan', 0.5),
+                S_weights.get('u_irr', 2.0),
+            ])
 
         # Override storage
         self._overrides = {}
@@ -148,18 +169,31 @@ class ReferenceGenerator:
         """Get interpolated targets at a specific time.
 
         Handles smooth ramping between day/night targets.
+        During the ramp period after a light transition, linearly
+        interpolates from the old targets to the new targets.
         """
         lights_on = light_schedule.is_on(time_s)
-        hour = (time_s / 3600.0) % 24.0
 
         if self.ramp_s <= 0:
-            return self.day_targets if lights_on else self.night_targets
+            return self.day_targets.copy() if lights_on else self.night_targets.copy()
 
-        # Check proximity to light transitions
-        # For simplicity, use linear interpolation during ramp period
+        hour = (time_s / 3600.0) % 24.0
+
         if lights_on:
+            # Lights ON — last transition was at on_hour
+            hours_since = (hour - light_schedule.on_hour) % 24.0
+            seconds_since = hours_since * 3600.0
+            if seconds_since < self.ramp_s:
+                alpha = seconds_since / self.ramp_s
+                return (1.0 - alpha) * self.night_targets + alpha * self.day_targets
             return self.day_targets.copy()
         else:
+            # Lights OFF — last transition was at off_hour
+            hours_since = (hour - light_schedule.off_hour) % 24.0
+            seconds_since = hours_since * 3600.0
+            if seconds_since < self.ramp_s:
+                alpha = seconds_since / self.ramp_s
+                return (1.0 - alpha) * self.day_targets + alpha * self.night_targets
             return self.night_targets.copy()
 
     def set_override(self, output_name, value):

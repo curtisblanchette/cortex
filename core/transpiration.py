@@ -27,7 +27,7 @@ RHO_AIR = 1.2        # kg/m³ - air density
 MW_WATER = 18.015    # g/mol - molecular weight of water
 R_GAS = 8.314        # J/(mol·K) - universal gas constant
 
-# Stomatal model parameters (Jarvis-type)
+# Stomatal model defaults (Jarvis-type) — used when substrate not provided
 THETA_WP = 0.10      # m³/m³ - wilting point (stomata close below this)
 THETA_FC = 0.40      # m³/m³ - field capacity (no water stress above this)
 VPD_CLOSE = 3.5      # kPa - VPD at which stomata fully close
@@ -35,7 +35,8 @@ PAR_HALF = 200.0     # µmol/m²/s - PAR at half-maximum conductance
 CO2_REF = 400.0      # ppm - reference CO2 for conductance scaling
 
 
-def stomatal_conductance(PAR, VPD, theta, CO2, g_s_max):
+def stomatal_conductance(PAR, VPD, theta, CO2, g_s_max,
+                         theta_wp=THETA_WP, theta_fc=THETA_FC):
     """Jarvis-type stomatal conductance model.
 
     g_s = g_s_max * f_light(PAR) * f_vpd(VPD) * f_water(theta) * f_co2(CO2)
@@ -49,19 +50,22 @@ def stomatal_conductance(PAR, VPD, theta, CO2, g_s_max):
         theta: Volumetric water content in m³/m³.
         CO2: CO2 concentration in ppm.
         g_s_max: Maximum stomatal conductance in mol/m²/s.
+        theta_wp: Wilting point from substrate profile.
+        theta_fc: Field capacity from substrate profile.
 
     Returns:
         Stomatal conductance in mol/m²/s.
     """
     f_light = PAR / (PAR + PAR_HALF) if PAR > 0 else 0.0
-    f_vpd = np.clip(1.0 - VPD / VPD_CLOSE, 0.05, 1.0)
-    f_water = np.clip((theta - THETA_WP) / (THETA_FC - THETA_WP), 0.0, 1.0)
-    f_co2 = np.clip(1.0 - 0.1 * (CO2 - CO2_REF) / CO2_REF, 0.5, 1.2)
+    f_vpd = min(max(1.0 - VPD / VPD_CLOSE, 0.05), 1.0)
+    f_water = min(max((theta - theta_wp) / (theta_fc - theta_wp), 0.0), 1.0)
+    f_co2 = min(max(1.0 - 0.1 * (CO2 - CO2_REF) / CO2_REF, 0.5), 1.2)
 
     return g_s_max * f_light * f_vpd * f_water * f_co2
 
 
-def transpiration_rate(T_leaf, T_air, w_air, PAR, theta, CO2, LAI, g_s_max, R_net=0.0):
+def transpiration_rate(T_leaf, T_air, w_air, PAR, theta, CO2, LAI, g_s_max,
+                       R_net=0.0, theta_wp=THETA_WP, theta_fc=THETA_FC):
     """Penman-Monteith transpiration rate.
 
     Simplified form for an indoor environment where wind speed is
@@ -77,6 +81,8 @@ def transpiration_rate(T_leaf, T_air, w_air, PAR, theta, CO2, LAI, g_s_max, R_ne
         LAI: Leaf area index (m²/m²).
         g_s_max: Maximum stomatal conductance in mol/m²/s.
         R_net: Net radiation absorbed by canopy in W/m².
+        theta_wp: Wilting point from substrate profile.
+        theta_fc: Field capacity from substrate profile.
 
     Returns:
         Transpiration rate in g/m²/hr (per unit ground area).
@@ -87,7 +93,8 @@ def transpiration_rate(T_leaf, T_air, w_air, PAR, theta, CO2, LAI, g_s_max, R_ne
     VPD = max(SVP_leaf - e_air, 0.0)
 
     # Stomatal conductance
-    g_s = stomatal_conductance(PAR, VPD, theta, CO2, g_s_max)
+    g_s = stomatal_conductance(PAR, VPD, theta, CO2, g_s_max,
+                               theta_wp=theta_wp, theta_fc=theta_fc)
 
     if g_s < 1e-8:
         return 0.0
@@ -135,7 +142,8 @@ def transpiration_latent_heat(E_rate_g_m2_hr, canopy_area_m2):
     return E_kg_s * LAMBDA_V
 
 
-def d_gs_dVPD(PAR, VPD, theta, CO2, g_s_max):
+def d_gs_dVPD(PAR, VPD, theta, CO2, g_s_max,
+              theta_wp=THETA_WP, theta_fc=THETA_FC):
     """Partial derivative of stomatal conductance w.r.t. VPD.
 
     Used in Jacobian computation.
@@ -144,8 +152,8 @@ def d_gs_dVPD(PAR, VPD, theta, CO2, g_s_max):
         return 0.0
 
     f_light = PAR / (PAR + PAR_HALF)
-    f_water = np.clip((theta - THETA_WP) / (THETA_FC - THETA_WP), 0.0, 1.0)
-    f_co2 = np.clip(1.0 - 0.1 * (CO2 - CO2_REF) / CO2_REF, 0.5, 1.2)
+    f_water = min(max((theta - theta_wp) / (theta_fc - theta_wp), 0.0), 1.0)
+    f_co2 = min(max(1.0 - 0.1 * (CO2 - CO2_REF) / CO2_REF, 0.5), 1.2)
 
     # d(f_vpd)/d(VPD) = -1/VPD_CLOSE (within the linear region)
     if VPD < VPD_CLOSE:
@@ -156,17 +164,18 @@ def d_gs_dVPD(PAR, VPD, theta, CO2, g_s_max):
     return g_s_max * f_light * df_vpd * f_water * f_co2
 
 
-def d_gs_dtheta(PAR, VPD, theta, CO2, g_s_max):
+def d_gs_dtheta(PAR, VPD, theta, CO2, g_s_max,
+                theta_wp=THETA_WP, theta_fc=THETA_FC):
     """Partial derivative of stomatal conductance w.r.t. theta."""
     if PAR <= 0:
         return 0.0
 
     f_light = PAR / (PAR + PAR_HALF)
-    f_vpd = np.clip(1.0 - VPD / VPD_CLOSE, 0.05, 1.0)
-    f_co2 = np.clip(1.0 - 0.1 * (CO2 - CO2_REF) / CO2_REF, 0.5, 1.2)
+    f_vpd = min(max(1.0 - VPD / VPD_CLOSE, 0.05), 1.0)
+    f_co2 = min(max(1.0 - 0.1 * (CO2 - CO2_REF) / CO2_REF, 0.5), 1.2)
 
-    if THETA_WP <= theta <= THETA_FC:
-        df_water = 1.0 / (THETA_FC - THETA_WP)
+    if theta_wp <= theta <= theta_fc:
+        df_water = 1.0 / (theta_fc - theta_wp)
     else:
         df_water = 0.0
 

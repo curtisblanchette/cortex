@@ -42,7 +42,7 @@ class FanPlugin(ActuatorPlugin):
 
     def get_fan_pct(self, u_local):
         """Compute normalized fan fraction (0-1) from control input."""
-        u_fan = np.clip(u_local[0], self.min_pct, self.max_pct)
+        u_fan = min(max(u_local[0], self.min_pct), self.max_pct)
         return u_fan / 100.0
 
     def dispatch_specs(self):

@@ -25,7 +25,7 @@ class SimulatedRoom:
     def __init__(self, room_config, equipment_config, registry,
                  initial_state=None,
                  sim_params=None, noise_seed=None, max_steps=86400,
-                 start_time_s=None):
+                 start_time_s=None, substrate=None):
         """Initialize simulated room.
 
         Args:
@@ -38,11 +38,13 @@ class SimulatedRoom:
             noise_seed: Random seed for reproducible noise.
             max_steps: Pre-allocated history capacity (grows if exceeded).
             start_time_s: Simulation start time in seconds (default: light on_hour).
+            substrate: SubstrateProfile instance.
         """
         self.params = sim_params or CalibrationParams()
         self.registry = registry
         self.dynamics = GrowRoomDynamics(room_config, equipment_config,
-                                         self.params, registry=registry)
+                                         self.params, registry=registry,
+                                         substrate=substrate)
 
         # The "true" state of the room (controller never sees this directly)
         if initial_state is not None:

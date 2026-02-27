@@ -39,7 +39,7 @@ class StandaloneACPlugin(ActuatorPlugin):
         fan_pct = room_props.get('fan_pct', 0.5)
         eta = params.eta_hvac
 
-        u_cool = np.clip(u_local[0], 0.0, 100.0) / 100.0
+        u_cool = min(max(u_local[0], 0.0), 100.0) / 100.0
         airflow = self.airflow_m3s * fan_pct
 
         Q_sensible = -u_cool * self.Q_cool_max * eta

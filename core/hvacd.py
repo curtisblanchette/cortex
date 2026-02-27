@@ -60,7 +60,7 @@ class HVACDModel:
             T_supply_target: Target supply air temperature in °C.
         """
         eta = params.eta_hvac
-        fan_pct = np.clip(u[4], self.fan_min, self.fan_max) / 100.0
+        fan_pct = min(max(u[4], self.fan_min), self.fan_max) / 100.0
         airflow = self.airflow_m3s * fan_pct
 
         if self.mode == 'setpoint':
@@ -70,8 +70,8 @@ class HVACDModel:
 
     def _setpoint_mode(self, T_air, w_air, T_supply, u, eta, airflow):
         """HVACD internal logic determines cooling/heating from setpoints."""
-        T_sp = np.clip(u[0], self.T_sp_min, self.T_sp_max)
-        RH_sp = np.clip(u[1], self.RH_sp_min, self.RH_sp_max)
+        T_sp = min(max(u[0], self.T_sp_min), self.T_sp_max)
+        RH_sp = min(max(u[1], self.RH_sp_min), self.RH_sp_max)
 
         # Determine what the HVACD needs to do
         T_error = T_air - T_sp      # positive = too warm, need cooling
@@ -113,8 +113,8 @@ class HVACDModel:
 
     def _direct_mode(self, T_air, w_air, T_supply, u, eta, airflow):
         """Direct control of cooling/heating percentages."""
-        u_cool = np.clip(u[0], 0.0, 100.0) / 100.0
-        u_heat = np.clip(u[1], 0.0, 100.0) / 100.0
+        u_cool = min(max(u[0], 0.0), 100.0) / 100.0
+        u_heat = min(max(u[1], 0.0), 100.0) / 100.0
 
         Q_sensible = (-u_cool * self.Q_cool_max + u_heat * self.Q_heat_max) * eta
 

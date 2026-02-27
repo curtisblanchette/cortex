@@ -63,10 +63,6 @@ CO2_AMBIENT = 420.0  # ppm outdoor CO2
 # Infiltration
 ACH_INFILTRATION = 0.1  # air changes per hour from leaks
 
-# Substrate
-SUBSTRATE_DEPTH = 0.15   # m
-
-
 class GrowRoomDynamics:
     """The core physics model. Everything else wraps or consumes this.
 
@@ -80,13 +76,19 @@ class GrowRoomDynamics:
     """
 
     def __init__(self, room_config, equipment_config, params=None,
-                 registry=None):
+                 registry=None, substrate=None):
         if registry is None:
             raise ValueError(
                 "GrowRoomDynamics requires an ActuatorRegistry. "
                 "Build one with core.actuators.factory.build_registry() "
                 "and pass it as the 'registry' argument."
             )
+
+        # Substrate profile
+        if substrate is None:
+            from core.substrate import SUBSTRATE_PROFILES, DEFAULT_PROFILE_NAME
+            substrate = SUBSTRATE_PROFILES[DEFAULT_PROFILE_NAME]
+        self.substrate = substrate
 
         # Handle nested YAML structure: {'room': {...}} or flat {...}
         room = room_config.get('room', room_config) if isinstance(room_config, dict) else room_config
@@ -102,6 +104,10 @@ class GrowRoomDynamics:
         self.C_air = self.rho_air * self.cp_air * self.V  # J/K
 
         self.registry = registry
+
+        # Pre-stored clip bounds for nonlinear_step (avoids 7 scalar np.clip calls)
+        self._clip_lower = np.array([5.0, 0.5, 200.0, 5.0, 0.0, 0.0, 5.0])
+        self._clip_upper = np.array([50.0, 30.0, 5000.0, 50.0, substrate.porosity, 50.0, 50.0])
 
         # Parameters (can be SharedParams or CalibrationParams)
         self._params_source = params
@@ -138,14 +144,8 @@ class GrowRoomDynamics:
 
         x_next = x + (dt / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
 
-        # Physical clipping
-        x_next[I_TA] = np.clip(x_next[I_TA], 5.0, 50.0)
-        x_next[I_WA] = np.clip(x_next[I_WA], 0.5, 30.0)
-        x_next[I_CO2] = np.clip(x_next[I_CO2], 200.0, 5000.0)
-        x_next[I_TL] = np.clip(x_next[I_TL], 5.0, 50.0)
-        x_next[I_TH] = np.clip(x_next[I_TH], 0.0, 0.6)
-        x_next[I_TS] = np.clip(x_next[I_TS], 0.0, 50.0)
-        x_next[I_TW] = np.clip(x_next[I_TW], 5.0, 50.0)
+        # Physical clipping (single vectorized call instead of 7 scalar clips)
+        np.clip(x_next, self._clip_lower, self._clip_upper, out=x_next)
 
         return x_next
 
@@ -185,7 +185,9 @@ class GrowRoomDynamics:
         PAR = Q_light * 2.0 / self.A_canopy if Q_light > 0 else 0.0
 
         E_rate = transpiration_rate(
-            T_l, T_a, w_a, PAR, theta, C, LAI, g_s_max
+            T_l, T_a, w_a, PAR, theta, C, LAI, g_s_max,
+            theta_wp=self.substrate.theta_wp,
+            theta_fc=self.substrate.theta_fc,
         )
         Q_transpiration = transpiration_latent_heat(E_rate, self.A_canopy)
 
@@ -203,8 +205,8 @@ class GrowRoomDynamics:
         CO2_infiltration = ach_s * (CO2_AMBIENT - C)
 
         # ---- Substrate dynamics (core physics) ----
-        E_m3 = E_rate * self.A_canopy / (1e6 * self.A_canopy * SUBSTRATE_DEPTH * 3600.0)
-        drain_rate = K_drain / 3600.0 * max(theta - 0.15, 0.0)
+        E_m3 = E_rate / (1e6 * self.substrate.depth_m * 3600.0)
+        drain_rate = K_drain / 3600.0 * max(theta - self.substrate.theta_drain, 0.0)
 
         # ODE 1: dT_a/dt
         dTa = (1.0 / self.C_air) * (
@@ -334,27 +336,46 @@ class GrowRoomDynamics:
             f_minus = self._derivatives(x_minus, u0, d0, params)
             A_c[:, j] = (f_plus - f_minus) / (2.0 * h_x[j])
 
-        # B_c = df/du
+        # B_c = df/du (boundary-aware: use actual span when clipped at bounds)
+        u_lower = self.registry.u_min
+        u_upper = self.registry.u_max
         B_c = np.zeros((n_x, n_u))
         for j in range(n_u):
             u_plus = u0.copy()
             u_minus = u0.copy()
             u_plus[j] += h_u[j]
             u_minus[j] -= h_u[j]
+            u_plus[j] = min(u_plus[j], u_upper[j])
+            u_minus[j] = max(u_minus[j], u_lower[j])
+            span = u_plus[j] - u_minus[j]
+            if span < 1e-10:
+                u_plus[j] = u0[j] + h_u[j]
+                u_minus[j] = u0[j]
+                span = h_u[j]
             f_plus = self._derivatives(x0, u_plus, d0, params)
             f_minus = self._derivatives(x0, u_minus, d0, params)
-            B_c[:, j] = (f_plus - f_minus) / (2.0 * h_u[j])
+            B_c[:, j] = (f_plus - f_minus) / span
 
         # Bd_c = df/dd
+        # Physical lower bounds for disturbances to prevent unphysical
+        # perturbations (e.g., negative Q_light) that produce wrong signs.
+        d_lower = np.array([0.0, -50.0, 0.0, 0.0, 0.0])
         Bd_c = np.zeros((n_x, n_d))
         for j in range(n_d):
             d_plus = d0.copy()
             d_minus = d0.copy()
             d_plus[j] += h_d[j]
             d_minus[j] -= h_d[j]
+            # Clamp to physical bounds; use forward difference when at bound
+            d_minus[j] = max(d_minus[j], d_lower[j])
+            span = d_plus[j] - d_minus[j]
+            if span < 1e-10:
+                d_plus[j] = d0[j] + h_d[j]
+                d_minus[j] = d0[j]
+                span = h_d[j]
             f_plus = self._derivatives(x0, u0, d_plus, params)
             f_minus = self._derivatives(x0, u0, d_minus, params)
-            Bd_c[:, j] = (f_plus - f_minus) / (2.0 * h_d[j])
+            Bd_c[:, j] = (f_plus - f_minus) / span
 
         self._jac_cache = {
             'x': x0.copy(), 'u': u0.copy(), 'd': d0.copy(),
@@ -385,7 +406,7 @@ class GrowRoomDynamics:
 
         VPD = vpd(T_l, w_a)
         w_sat = saturation_humidity(T_a)
-        RH = np.clip((w_a / w_sat) * 100.0, 0.0, 100.0)
+        RH = min(max((w_a / w_sat) * 100.0, 0.0), 100.0)
 
         return {
             'VPD': VPD,

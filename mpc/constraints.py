@@ -12,14 +12,16 @@ from core.dynamics import N_STATES
 
 
 # Default state bounds [lower, upper]
+# Physical feasibility bounds (not comfort targets).
+# Wide enough for QP feasibility during transients.
 DEFAULT_STATE_BOUNDS = {
-    'T_a':    (15.0, 35.0),     # C
-    'w_a':    (3.0, 20.0),      # g/kg
-    'CO2':    (400.0, 2000.0),  # ppm
-    'T_l':    (15.0, 35.0),     # C
-    'theta':  (0.05, 0.55),     # m3/m3
-    'T_s':    (5.0, 45.0),      # C
-    'T_w':    (10.0, 40.0),     # C
+    'T_a':    (-200.0, 200.0),  # C — wide bounds prevent infeasibility from linearization error
+    'w_a':    (-50.0, 100.0),   # g/kg — wide for linearization feasibility
+    'CO2':    (0.0, 10000.0),   # ppm
+    'T_l':    (-200.0, 200.0),  # C — coupled to T_a, must be equally wide
+    'theta':  (0.0, 1.0),       # m3/m3
+    'T_s':    (-200.0, 200.0),  # C — supply temp can go low at high cooling
+    'T_w':    (-200.0, 200.0),  # C — wall temp coupled to air
 }
 
 STATE_NAMES = ['T_a', 'w_a', 'CO2', 'T_l', 'theta', 'T_s', 'T_w']

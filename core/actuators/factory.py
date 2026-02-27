@@ -69,13 +69,15 @@ def _load_profile_yaml(profile_name: str) -> List[str]:
 
 
 def build_registry(equipment_config: dict, room_config: dict,
-                   profile_override: str = None) -> ActuatorRegistry:
+                   profile_override: str = None,
+                   substrate=None) -> ActuatorRegistry:
     """Build an ActuatorRegistry from config.
 
     Args:
         equipment_config: Equipment YAML dict (may contain 'profile' section).
         room_config: Room YAML dict (for room geometry props).
         profile_override: CLI --profile override (takes precedence over config).
+        substrate: SubstrateProfile instance (for substrate_depth_m in room_props).
 
     Returns:
         Fully assembled ActuatorRegistry.
@@ -116,5 +118,8 @@ def build_registry(equipment_config: dict, room_config: dict,
         'rho_air': room.get('rho_air', 1.2),
         'cp_air': room.get('cp_air', 1005.0),
     }
+
+    if substrate is not None:
+        room_props['substrate_depth_m'] = substrate.depth_m
 
     return ActuatorRegistry(plugins, room_props)

@@ -13,11 +13,22 @@ class TelemetryRecorder:
     """Captures per-tick data from the control loop for visualization."""
 
     # Fallback actuator order (used when no registry provided)
-    ACTUATOR_ORDER = ['cool', 'heat', 'co2', 'humidifier', 'fan', 'irrigation']
+    ACTUATOR_ORDER = ['cool', 'heat', 'co2', 'dehumidifier', 'fan', 'irrigation']
 
     def __init__(self, registry=None):
         if registry is not None:
             self.ACTUATOR_ORDER = registry.actuator_order()
+            self.CHANNEL_NAMES = registry.channel_names
+            # Map each dispatch actuator to its u column index
+            specs = registry.all_dispatch_specs()
+            channels = registry.channel_names
+            self._dispatch_to_u = {}
+            for spec in specs:
+                if spec.channel_name in channels:
+                    self._dispatch_to_u[spec.actuator_name] = channels.index(spec.channel_name)
+        else:
+            self.CHANNEL_NAMES = ['T_sp', 'RH_sp', 'u_hum', 'u_co2', 'u_fan', 'u_irr']
+            self._dispatch_to_u = {}
         self.time = []
         self.x_hat = []
         self.x_true = []
@@ -84,6 +95,8 @@ class TelemetryRecorder:
             'failsafe': self.failsafe,
             'dispatch': np.array(self.dispatch_commands) if self.dispatch_commands else None,
             'dispatch_labels': self.ACTUATOR_ORDER,
+            'channel_names': self.CHANNEL_NAMES,
+            'dispatch_to_u': self._dispatch_to_u,
         }
 
 
@@ -220,12 +233,13 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     # ===== Panel 6: Control Actions =====
     ax6 = fig.add_subplot(gs[2, 1])
     shade_lights(ax6, t, d)
-    ax6.plot(t, u[:, 0], color=C_ACTUAL, linewidth=1.0, label='T_sp (\u00b0C)', zorder=3)
-    ax6.plot(t, u[:, 1], color=C_CONTROL2, linewidth=1.0, label='RH_sp (%)', zorder=3)
-    ax6.plot(t, u[:, 4], color=C_CONTROL, linewidth=0.8, label='Fan (%)', zorder=3)
-    ax6.plot(t, u[:, 3], color=C_CONTROL3, linewidth=0.8, label='CO2 inj (%)', zorder=3)
-    ax6.plot(t, u[:, 2], color='#00BCD4', linewidth=0.8, label='Humidifier (%)', zorder=3)
-    ax6.plot(t, u[:, 5], color='#795548', linewidth=0.8, label='Irrigation (%)', zorder=3)
+    channel_names = data.get('channel_names', [])
+    _ctrl_colors = [C_ACTUAL, C_CONTROL2, C_CONTROL, C_CONTROL3,
+                    '#00BCD4', '#795548', '#E91E63', '#607D8B']
+    for i in range(u.shape[1]):
+        label = channel_names[i] if i < len(channel_names) else f'u[{i}]'
+        color = _ctrl_colors[i % len(_ctrl_colors)]
+        ax6.plot(t, u[:, i], color=color, linewidth=0.9, label=label, zorder=3)
     ax6.legend(loc='upper right', fontsize=7, ncol=2)
     ax6.set_title('MPC Control Output', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax6, 'Setpoint / Output', show_xlabel=True)
@@ -256,9 +270,13 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
         ax_gw_r = fig.add_subplot(gs[next_row, 1])
         shade_lights(ax_gw_r, t, d)
         # Show dispatch delta: difference between MPC raw and gateway output
-        mpc_mapped = [u[:, 0], u[:, 1], u[:, 3], u[:, 2], u[:, 4], u[:, 5]]
+        dispatch_to_u = data.get('dispatch_to_u', {})
         for i, name in enumerate(dispatch_labels):
-            delta = mpc_mapped[i][:len(dispatch)] - dispatch[:, i]
+            u_idx = dispatch_to_u.get(name)
+            if u_idx is not None and u_idx < u.shape[1]:
+                delta = u[:len(dispatch), u_idx] - dispatch[:, i]
+            else:
+                delta = -dispatch[:, i]
             ax_gw_r.plot(t_disp, delta,
                          color=gw_colors.get(name, '#666'),
                          linewidth=0.8, label=gw_labels.get(name, name), zorder=3)

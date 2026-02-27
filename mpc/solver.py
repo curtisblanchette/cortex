@@ -21,9 +21,9 @@ from .constraints import ConstraintBuilder
 
 
 # Output mapping: how to compute tracked outputs from state
-# y = C_out @ x  where y = [VPD_approx, T_a, CO2, dθ/dt_approx, θ]
-# For MPC, we linearize VPD and dryback around the operating point
-N_OUTPUTS = 5
+# y = C_out @ x  where y = [VPD, T_a, CO2, dθ/dt, θ, RH]
+# VPD and RH are linearized around the operating point
+N_OUTPUTS = 6
 
 
 class MPCSolver:
@@ -84,6 +84,29 @@ class MPCSolver:
             'setup_time_ms': 0.0,
         }
 
+    def _pre_equilibrate(self, x_hat, u0, d0, params, n_steps=50):
+        """Run nonlinear model forward to settle fast states (T_leaf, T_supply).
+
+        Returns the equilibrated state for linearization. The QP still
+        starts from x_hat — only the Jacobian operating point changes.
+        """
+        x = x_hat.copy()
+        for _ in range(n_steps):
+            x = self.dynamics.nonlinear_step(x, u0, d0, params, dt=1.0)
+        return x
+
+    def force_cold_start(self):
+        """Force full OSQP re-setup on next solve.
+
+        Call this when the operating point changes dramatically (e.g.,
+        light transition), making the warm-start invalid.
+        """
+        self._solver_initialized = False
+        self._solver = None
+        self._prev_u = None
+        self._prev_x = None
+        self._prev_y = None
+
     def solve(self, x_hat, d_forecast, reference, u_prev=None,
               Q_diag=None, R_diag=None, S_diag=None):
         """Solve MPC QP and return optimal control.
@@ -112,16 +135,24 @@ class MPCSolver:
 
         # Default weights
         if Q_diag is None:
-            Q_diag = np.array([10.0, 5.0, 1.0, 3.0, 2.0])
+            Q_diag = np.array([10.0, 5.0, 1.0, 3.0, 2.0, 5.0])
         if R_diag is None:
             R_diag = self.registry.default_R_diag
         if S_diag is None:
             S_diag = self.registry.default_S_diag
 
-        # Linearize around current operating point
+        # Pre-equilibrate fast states before linearization.
+        # T_leaf (~43s) and T_supply (~120s) equilibrate much faster than
+        # the MPC prediction horizon (30 min). Linearizing at the raw EKF
+        # state captures transient dynamics that decay within 2-3 steps,
+        # causing the multi-step prediction to systematically underestimate
+        # the cooling needed (the MPC sees phantom overshoot).
+        # Running 300 nonlinear steps (~1ms) settles the fast modes so the
+        # Jacobian reflects post-transient behavior across the full horizon.
         u0 = u_prev
         d0 = d_forecast[0] if len(d_forecast) > 0 else GrowRoomDynamics.default_disturbance()
-        A_d, B_d, Bd_d, c_d = self.dynamics.linearize(x_hat, u0, d0, params, dt=self.step_s)
+        x_lin = self._pre_equilibrate(x_hat, u0, d0, params)
+        A_d, B_d, Bd_d, c_d = self.dynamics.linearize(x_lin, u0, d0, params, dt=self.step_s)
 
         # Affine output model: y = C_out @ x + d_offset
         C_out, d_offset = self._build_output_matrix(x_hat, params)
@@ -421,6 +452,7 @@ class MPCSolver:
           y[2] = CO2 (direct)
           y[3] = dryback rate (disabled — needs finite-difference formulation)
           y[4] = theta (direct)
+          y[5] = RH  (linearized around x0 with affine correction)
 
         Returns:
             C: Output matrix (N_OUTPUTS, n_x).
@@ -431,8 +463,9 @@ class MPCSolver:
         C = np.zeros((N_OUTPUTS, self.n_x))
         d_offset = np.zeros(N_OUTPUTS)
 
-        T_l = x0[3]
+        T_a = x0[0]
         w_a = x0[1]
+        T_l = x0[3]
 
         # VPD = SVP(T_l) - e_air where e_air = w_a * P / (622 + w_a)
         # d(VPD)/dT_l = dSVP/dT_l
@@ -455,6 +488,21 @@ class MPCSolver:
 
         # Theta (direct, no offset needed)
         C[4, 4] = 1.0
+
+        # RH = e_air / SVP(T_a) * 100
+        # where e_air = w_a * P / (622 + w_a)
+        SVP_Ta = saturation_vapor_pressure(T_a)
+        e_air = w_a * P_ATM / (622.0 + w_a)
+        RH_0 = e_air / SVP_Ta * 100.0 if SVP_Ta > 0 else 50.0
+
+        # d(RH)/dT_a = -e_air * dSVP/dT_a / SVP² * 100
+        dSVP_dTa = d_svp_dT(T_a)
+        if SVP_Ta > 0:
+            C[5, 0] = -e_air * dSVP_dTa / (SVP_Ta ** 2) * 100.0
+        # d(RH)/dw_a = P * 622 / (622 + w_a)² / SVP(T_a) * 100
+        if SVP_Ta > 0:
+            C[5, 1] = P_ATM * 622.0 / (622.0 + w_a) ** 2 / SVP_Ta * 100.0
+        d_offset[5] = RH_0 - C[5, :] @ x0
 
         return C, d_offset
 

@@ -30,6 +30,7 @@ class ComplianceTracker:
             'T': compliance.get('T_tolerance', 1.0),
             'CO2': compliance.get('CO2_tolerance', 100.0),
             'theta': compliance.get('theta_tolerance', 0.05),
+            'RH': compliance.get('RH_tolerance', 5.0),
         }
 
         # Rolling buffers: (timestamp, value, target, in_compliance)
@@ -54,6 +55,7 @@ class ComplianceTracker:
             'T': x_hat[0],
             'CO2': x_hat[2],
             'theta': x_hat[4],
+            'RH': derived.get('RH', 50.0),
         }
 
         targets = {
@@ -61,6 +63,7 @@ class ComplianceTracker:
             'T': reference_targets.get('T', 26.0),
             'CO2': reference_targets.get('CO2', 1200.0),
             'theta': reference_targets.get('theta', 0.35),
+            'RH': reference_targets.get('RH', 55.0),
         }
 
         for key in self.tolerances:

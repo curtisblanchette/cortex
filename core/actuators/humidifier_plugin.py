@@ -33,7 +33,7 @@ class HumidifierPlugin(ActuatorPlugin):
         ]
 
     def compute_physics(self, x, u_local, d, params, room_props):
-        u_hum = np.clip(u_local[0], 0.0, 100.0) / 100.0
+        u_hum = min(max(u_local[0], 0.0), 100.0) / 100.0
         V = room_props['V']
         rho_air = room_props.get('rho_air', 1.2)
 

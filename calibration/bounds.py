@@ -32,3 +32,18 @@ def clip_params(params_array):
         lo, hi = PARAM_BOUNDS[name]
         clipped[i] = np.clip(clipped[i], lo, hi)
     return clipped
+
+
+def bounds_with_substrate(substrate=None):
+    """Return PARAM_BOUNDS with K_drain bounds from substrate profile.
+
+    Args:
+        substrate: SubstrateProfile or None.
+
+    Returns:
+        Dict of parameter bounds.
+    """
+    bounds = dict(PARAM_BOUNDS)
+    if substrate is not None:
+        bounds['K_drain'] = substrate.K_drain_bounds
+    return bounds

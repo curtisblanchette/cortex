@@ -1,28 +1,21 @@
 profile:
   name: hvacd_full
   actuators:
-    - hvacd
-    - humidifier
-    - co2_injector
-    - fan
-    - irrigation
-
+  - hvacd
+  - humidifier
+  - co2_injector
+  - fan
+  - irrigation
 hvacd:
-  model: "Desert Aire"
-  mode: setpoint              # setpoint or direct
-
-  # Capacity
+  model: Desert Aire
+  mode: setpoint
   cooling_capacity_W: 35000.0
   heating_capacity_W: 15000.0
-  dehumidification_L_hr: 8.0  # liters per hour max moisture removal
+  dehumidification_L_hr: 8.0
   supply_airflow_cfm: 3000.0
-
-  # Modbus
   modbus_address: 1
-  modbus_port: "/dev/ttyUSB0"
+  modbus_port: /dev/ttyUSB0
   modbus_baudrate: 9600
-
-  # Register map
   registers:
     temp_setpoint: 100
     rh_setpoint: 101
@@ -30,108 +23,134 @@ hvacd:
     mode: 103
     supply_temp_read: 200
     return_temp_read: 201
-
-  # Operating limits
   limits:
-    T_sp_min: 15.0           # °C
-    T_sp_max: 32.0           # °C
-    RH_sp_min: 40.0          # %
-    RH_sp_max: 80.0          # %
-    fan_min_pct: 20.0        # % - minimum fan speed
-    fan_max_pct: 100.0       # %
-
+    T_sp_min: 15.0
+    T_sp_max: 32.0
+    RH_sp_min: 40.0
+    RH_sp_max: 80.0
+    fan_min_pct: 20.0
+    fan_max_pct: 100.0
+standalone_dehumidifier:
+  model: Quest 506
+  mode: variable
+  capacity_L_hr: 10.0
+  power_draw_W: 2800.0
+  waste_heat_W_per_L_hr: 280.0
+  interface: mqtt
+  topic: cortex/room1/dehumidifier
+  limits:
+    min_pct: 0.0
+    max_pct: 100.0
+    min_room_temp_C: 1.0
+    min_room_rh_pct: 30.0
 actuators:
   co2:
     type: solenoid
     interface: mqtt
-    topic: "cortex/room1/co2"
-    flow_rate_ppm_s: 50.0    # ppm/s at full flow
+    topic: cortex/room1/co2
+    flow_rate_ppm_s: 50.0
     max_pct: 100.0
-
   humidifier:
     type: solenoid
     interface: mqtt
-    topic: "cortex/room1/humidifier"
-    capacity_g_hr: 2000.0    # g/hr at full output
+    topic: cortex/room1/humidifier
+    capacity_g_hr: 2000.0
     max_pct: 100.0
-
   irrigation:
     type: solenoid
     interface: mqtt
-    topic: "cortex/room1/irrigation"
+    topic: cortex/room1/irrigation
     flow_rate_ml_s: 50.0
     max_pct: 100.0
-
   fan:
     type: variable_speed
     interface: modbus
     min_pct: 20.0
     max_pct: 100.0
-
 dispatch:
   cool:
-    dead_band: 0.5              # °C — don't change T setpoint for < 0.5°C difference
-    min_hold_s: 120             # Don't change cooling setpoint more often than every 2 min
-    rate_limit: 2.0             # °C/min max ramp rate
-    anti_short_cycle_s: 300     # 5 min minimum compressor run time
-    protocol: modbus
-
-  heat:
-    dead_band: 0.5              # °C
+    dead_band: 0.5
     min_hold_s: 120
-    rate_limit: 2.0             # °C/min
-    anti_short_cycle_s: 180     # 3 min minimum for reheat
+    rate_limit: 2.0
+    anti_short_cycle_s: 300
     protocol: modbus
-    conflicts: [cool]           # Never heat + cool simultaneously
-
+  heat:
+    dead_band: 0.5
+    min_hold_s: 120
+    rate_limit: 2.0
+    anti_short_cycle_s: 180
+    protocol: modbus
+    conflicts:
+    - cool
   co2:
-    dead_band: 50               # ppm — don't toggle solenoid for < 50 ppm difference
-    min_hold_s: 30              # Minimum 30s on or off
-    rate_limit: null            # Binary — no ramp
+    dead_band: 50
+    min_hold_s: 30
+    rate_limit: null
     protocol: mqtt_relay
-    lights_only: true           # Never inject CO2 during dark period
-
+    lights_only: true
   humidifier:
-    dead_band: 3.0              # %RH
+    dead_band: 3.0
     min_hold_s: 60
     rate_limit: null
     protocol: mqtt_relay
-    conflicts: [dehumidify]     # Never humidify + dehumidify simultaneously
-
+    conflicts:
+    - dehumidify
+  dehumidifier:
+    dead_band: 3.0
+    min_hold_s: 120
+    rate_limit: 10.0
+    anti_short_cycle_s: 300
+    protocol: mqtt_relay
+    conflicts:
+    - humidifier
   fan:
-    dead_band: 0.05             # 5% — don't change for tiny differences
+    dead_band: 0.05
     min_hold_s: 30
-    rate_limit: 0.1             # 10%/min max ramp rate (VFD-friendly)
+    rate_limit: 0.1
     protocol: modbus_0_10v
-
   irrigation:
-    dead_band: null             # Event-driven, not continuous
-    min_hold_s: 300             # 5 min minimum between irrigation events
+    dead_band: null
+    min_hold_s: 300
     rate_limit: null
     protocol: mqtt_relay
-    max_daily_events: 12        # Safety cap
-
+    max_daily_events: 12
 sensors:
   esp32:
-    mqtt_topic: "cortex/room1/sensors/#"
+    mqtt_topic: cortex/room1/sensors/#
     staleness_threshold_s: 5.0
     devices:
       sht31:
-        measures: [T_air, RH]
-        accuracy_T: 0.3       # °C
-        accuracy_RH: 2.0      # %
+        measures:
+        - T_air
+        - RH
+        accuracy_T: 0.3
+        accuracy_RH: 2.0
       scd30:
-        measures: [CO2]
-        accuracy: 30.0        # ppm
+        measures:
+        - CO2
+        accuracy: 30.0
       mlx90614:
-        measures: [T_leaf]
-        accuracy: 0.5         # °C
+        measures:
+        - T_leaf
+        accuracy: 0.5
       thermocouple:
-        measures: [T_supply]
-        accuracy: 0.3         # °C
-
+        measures:
+        - T_supply
+        accuracy: 0.3
   aroya:
     api_poll_interval_s: 180.0
     staleness_threshold_s: 600.0
-    measures: [theta, EC]
-    accuracy_theta: 0.01      # m³/m³
+    measures:
+    - theta
+    - EC
+    accuracy_theta: 0.01
+standalone_ac:
+  model: Mini-split 35kW
+  mode: variable
+  cooling_capacity_W: 35000.0
+  supply_airflow_cfm: 3000.0
+  interface: mqtt
+  topic: cortex/room1/ac
+  limits:
+    min_pct: 0.0
+    max_pct: 100.0

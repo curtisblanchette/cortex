@@ -35,7 +35,7 @@ class CO2InjectorPlugin(ActuatorPlugin):
         ]
 
     def compute_physics(self, x, u_local, d, params, room_props):
-        u_co2 = np.clip(u_local[0], 0.0, 100.0) / 100.0
+        u_co2 = min(max(u_local[0], 0.0), 100.0) / 100.0
         CO2_injection = self.inject_rate * u_co2  # ppm/s
 
         return PhysicsEffect(dC_dt=CO2_injection)

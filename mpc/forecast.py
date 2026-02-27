@@ -26,6 +26,9 @@ class DisturbanceForecast:
         self.par_efficiency = room.get('par_efficiency', 0.4)
         self.n_d = N_DISTURBANCES
 
+        # Ramp duration matching simulation physics (avoid step discontinuity)
+        self._ramp_s = 60.0
+
     def generate(self, current_time_s, current_d, horizon_steps=60, step_s=60.0):
         """Generate disturbance forecast.
 
@@ -43,8 +46,13 @@ class DisturbanceForecast:
         for k in range(horizon_steps):
             future_time = current_time_s + k * step_s
 
-            # Lighting: KNOWN EXACTLY from schedule
-            forecast[k, 0] = self._light_heat(future_time)
+            # Lighting: persistence forecast (hold current level).
+            # The transpiration model creates a strong nonlinearity at
+            # Q_light=0 that makes linearization across light transitions
+            # produce wrong-signed Jacobians.  Holding the current level
+            # keeps linearization valid; the cold start at the actual
+            # transition re-linearizes at the new operating point.
+            forecast[k, 0] = current_d[0]
 
             # Outdoor weather: persistence forecast (hold current)
             forecast[k, 1] = current_d[1]  # T_out
@@ -57,13 +65,34 @@ class DisturbanceForecast:
         return forecast
 
     def _light_heat(self, time_s):
-        """Compute lighting heat load at a future time."""
+        """Compute lighting heat load with smooth ramp transitions.
+
+        Matches the simulation's DisturbanceScheduler ramp to avoid
+        plant/model mismatch at light transitions.
+        """
         hour = (time_s / 3600.0) % 24.0
         Q_max = self.light_power_W * (1.0 - self.par_efficiency)
+        ramp_hr = self._ramp_s / 3600.0
 
         if self.on_hour <= self.off_hour:
-            lights_on = self.on_hour <= hour < self.off_hour
+            if hour < self.on_hour - ramp_hr or hour > self.off_hour + ramp_hr:
+                return 0.0
+            elif hour < self.on_hour + ramp_hr:
+                frac = (hour - self.on_hour + ramp_hr) / (2.0 * ramp_hr)
+                return Q_max * np.clip(frac, 0.0, 1.0)
+            elif hour > self.off_hour - ramp_hr:
+                frac = (self.off_hour + ramp_hr - hour) / (2.0 * ramp_hr)
+                return Q_max * np.clip(frac, 0.0, 1.0)
+            else:
+                return Q_max
         else:
-            lights_on = hour >= self.on_hour or hour < self.off_hour
-
-        return Q_max if lights_on else 0.0
+            if self.off_hour + ramp_hr < hour < self.on_hour - ramp_hr:
+                return 0.0
+            elif self.on_hour - ramp_hr <= hour <= self.on_hour + ramp_hr:
+                frac = (hour - self.on_hour + ramp_hr) / (2.0 * ramp_hr)
+                return Q_max * np.clip(frac, 0.0, 1.0)
+            elif self.off_hour - ramp_hr <= hour <= self.off_hour + ramp_hr:
+                frac = (self.off_hour + ramp_hr - hour) / (2.0 * ramp_hr)
+                return Q_max * np.clip(frac, 0.0, 1.0)
+            else:
+                return Q_max

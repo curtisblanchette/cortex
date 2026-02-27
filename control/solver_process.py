@@ -91,11 +91,42 @@ class SolverProcess:
         self.solve_count = 0
         self.running = False
 
+        # Light state tracking for OSQP cold-start on transitions
+        self._last_lights_on = None
+
+        # MPC cadence control: solve every _mpc_interval ticks, not every tick.
+        # EKF runs every tick for up-to-date state estimation.
+        self._tick_count = 0
+        self._mpc_interval = 1  # default: solve every tick (production)
+        self._cached_trajectory = None
+        self._cached_solve_info = {'status': 'not_solved', 'iterations': 0}
+        self._cached_fs_level = 'P1_NORMAL'
+        self._cached_ref_targets = None
+
+        # Integral action for offset-free tracking.
+        # Accumulates persistent tracking error and biases the MPC reference
+        # to compensate for systematic linearization mismatch.
+        self._T_error_integral = 0.0
+        self._integral_gain = 0.4    # bias per °C·s of accumulated error
+        self._integral_max = 8.0     # max reference bias (°C)
+
         # Telemetry callback (optional)
         self._telemetry_callback = None
 
+    def set_mpc_interval(self, interval):
+        """Set MPC solve interval in simulation ticks.
+
+        For simulation, set to mpc.step_s so the MPC solves at the same
+        cadence as its prediction step. The EKF still runs every tick.
+        """
+        self._mpc_interval = max(1, int(interval))
+
     def solve_once(self):
-        """Run one EKF + MPC cycle and publish the solution.
+        """Run one EKF cycle, and MPC solve on cadence.
+
+        The EKF runs every call for up-to-date state estimation.
+        The MPC only solves every _mpc_interval calls to match the
+        prediction step size and prevent du constraint mismatch.
 
         Returns:
             (x_hat, u_opt, trajectory, info)
@@ -107,74 +138,134 @@ class SolverProcess:
         d_current = self.io.get_disturbance()
         current_time = self.io.get_time()
 
-        # EKF update
+        # Detect light state changes — force OSQP cold start + failsafe reset
+        current_lights = self.light_schedule.is_on(current_time)
+        force_solve = False
+        if self._last_lights_on is not None and current_lights != self._last_lights_on:
+            self.mpc.force_cold_start()
+            self.failsafe.reset()
+            self._T_error_integral = 0.0
+            force_solve = True
+            logger.info(f"[SolverProcess] Light transition at t={current_time:.0f}s — "
+                        f"forcing OSQP cold start + failsafe reset")
+        self._last_lights_on = current_lights
+
+        # EKF update (every tick)
         params = self._get_params()
         x_hat, P, innovation = self.ekf.update(
             z_meas, self.last_u, d_current, params, dt=1.0
         )
 
-        # MPC solve
-        ref_trajectory = self.reference.generate(
-            current_time, self.light_schedule,
-            horizon_steps=self.mpc.Np, step_s=self.mpc.step_s,
-        )
-        d_forecast = self.forecast.generate(
-            current_time, d_current,
-            horizon_steps=self.mpc.Np, step_s=self.mpc.step_s,
+        self._tick_count += 1
+        should_solve = (
+            force_solve
+            or self._cached_trajectory is None
+            or self._tick_count % self._mpc_interval == 0
         )
 
-        u_opt, trajectory, solve_info = self.mpc.solve(
-            x_hat, d_forecast, ref_trajectory, u_prev=self.last_u,
-            Q_diag=self.reference.Q_diag,
-            R_diag=self.reference.R_diag,
-            S_diag=self.reference.S_diag,
-        )
+        if should_solve:
+            # MPC solve
+            ref_trajectory = self.reference.generate(
+                current_time, self.light_schedule,
+                horizon_steps=self.mpc.Np, step_s=self.mpc.step_s,
+            )
+            d_forecast = self.forecast.generate(
+                current_time, d_current,
+                horizon_steps=self.mpc.Np, step_s=self.mpc.step_s,
+            )
 
-        # Fail-safe check
-        u_apply, fs_level = self.failsafe.check_solve(
-            solve_info['status'], u_opt, solve_info
-        )
-
-        if u_apply is not None:
-            self.last_u = u_apply.copy()
-
-        t_elapsed = (time.perf_counter() - t_start) * 1000.0
-        self.solve_count += 1
-
-        # Build solution dict
-        confidence = 1.0
-        if 'inaccurate' in solve_info.get('status', ''):
-            confidence = 0.7
-        if fs_level != 'P1_NORMAL':
-            confidence = 0.5
-
-        solution = self._build_solution(
-            u_apply if u_apply is not None else self.last_u,
-            x_hat, trajectory, solve_info,
-            t_elapsed, confidence, current_time,
-        )
-
-        # Publish solution
-        self.solution_store.publish(solution)
-        if self.redis:
-            self._publish_to_redis(solution)
-
-        # Record solve in trigger
-        self.trigger.record_solve()
-
-        # Compliance tracking
-        if self.compliance:
-            derived = self.dynamics.derived_outputs(x_hat)
-            ref_targets = {
+            # Cache UNBIASED reference targets for compliance tracking
+            # (must happen before integral bias is applied)
+            self._cached_ref_targets = {
                 'VPD': ref_trajectory[0, 0],
                 'T': ref_trajectory[0, 1],
                 'CO2': ref_trajectory[0, 2],
                 'theta': ref_trajectory[0, 4],
+                'RH': ref_trajectory[0, 5],
             }
-            self.compliance.update(x_hat, derived, ref_targets, current_time)
+
+            # Integral action: bias the T reference to compensate for
+            # persistent model-plant mismatch. The linearized MPC
+            # systematically underestimates cooling needs because its
+            # multi-step predictions overestimate the cooling effect
+            # (phantom overshoot). The integral accumulates tracking
+            # error and shifts the reference downward, making the MPC
+            # command more cooling than the linear model suggests.
+            T_ref = ref_trajectory[0, 1]  # current T target
+            T_error = x_hat[0] - T_ref    # positive = too hot
+            dt_solve = self.mpc.step_s * self._mpc_interval
+            self._T_error_integral += T_error * dt_solve
+            self._T_error_integral = np.clip(
+                self._T_error_integral,
+                -self._integral_max / max(self._integral_gain, 1e-6),
+                self._integral_max / max(self._integral_gain, 1e-6),
+            )
+            T_bias = self._integral_gain * self._T_error_integral
+            T_bias = np.clip(T_bias, -self._integral_max, self._integral_max)
+            ref_trajectory = ref_trajectory.copy()
+            ref_trajectory[:, 1] -= T_bias
+
+            u_opt, trajectory, solve_info = self.mpc.solve(
+                x_hat, d_forecast, ref_trajectory, u_prev=self.last_u,
+                Q_diag=self.reference.Q_diag,
+                R_diag=self.reference.R_diag,
+                S_diag=self.reference.S_diag,
+            )
+
+            # Fail-safe check
+            u_apply, fs_level = self.failsafe.check_solve(
+                solve_info['status'], u_opt, solve_info
+            )
+
+            if u_apply is not None:
+                self.last_u = u_apply.copy()
+            elif fs_level == 'P3_SOLVER_OFFLINE':
+                self.last_u = self.registry.default_control()
+
+            self.solve_count += 1
+
+            # Build solution dict
+            confidence = 1.0
+            if 'inaccurate' in solve_info.get('status', ''):
+                confidence = 0.7
+            if fs_level != 'P1_NORMAL':
+                confidence = 0.5
+
+            solution = self._build_solution(
+                u_apply if u_apply is not None else self.last_u,
+                x_hat, trajectory, solve_info,
+                (time.perf_counter() - t_start) * 1000.0,
+                confidence, current_time,
+            )
+
+            # Publish solution
+            self.solution_store.publish(solution)
+            if self.redis:
+                self._publish_to_redis(solution)
+
+            # Record solve in trigger
+            self.trigger.record_solve()
+
+            # Cache for between-solve ticks
+            self._cached_trajectory = trajectory
+            self._cached_solve_info = solve_info
+            self._cached_fs_level = fs_level
+        else:
+            trajectory = self._cached_trajectory
+            solve_info = self._cached_solve_info
+            fs_level = self._cached_fs_level
+
+        t_elapsed = (time.perf_counter() - t_start) * 1000.0
+
+        # Compliance tracking (every tick)
+        if self.compliance and self._cached_ref_targets is not None:
+            derived = self.dynamics.derived_outputs(x_hat)
+            self.compliance.update(
+                x_hat, derived, self._cached_ref_targets, current_time
+            )
 
         info = {
-            'tick': self.solve_count - 1,
+            'tick': self._tick_count - 1,
             'time_s': current_time,
             'solve_status': solve_info['status'],
             'solve_ms': t_elapsed,

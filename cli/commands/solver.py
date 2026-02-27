@@ -5,10 +5,10 @@ import signal
 import sys
 
 from cli.bootstrap import (
-    load_configs, make_redis, build_registry, build_shared_params,
-    build_dynamics, build_ekf, build_mpc, build_reference,
-    build_light_schedule, build_forecast, build_compliance, build_failsafe,
-    build_real_io,
+    load_configs, make_redis, build_substrate, build_registry,
+    build_shared_params, build_dynamics, build_ekf, build_mpc,
+    build_reference, build_light_schedule, build_forecast,
+    build_compliance, build_failsafe, build_real_io,
 )
 
 
@@ -22,6 +22,8 @@ def register(subparsers):
                    help='Room identifier (default: room1)')
     p.add_argument('--config', type=str, default='config',
                    help='Config directory')
+    p.add_argument('--substrate', type=str, default=None,
+                   help='Substrate profile override (e.g. coco_coir, rockwool, perlite)')
     p.set_defaults(func=run)
 
 
@@ -37,13 +39,15 @@ def run(args):
     print("[Cortex] Redis connected.")
 
     configs = load_configs(args.config)
-    registry = build_registry(configs)
-    shared_params = build_shared_params()
-    dynamics = build_dynamics(configs, shared_params, registry)
+    substrate_name = getattr(args, 'substrate', None)
+    substrate = build_substrate(configs, substrate_override=substrate_name)
+    registry = build_registry(configs, substrate=substrate)
+    shared_params = build_shared_params(substrate=substrate)
+    dynamics = build_dynamics(configs, shared_params, registry, substrate=substrate)
     io = build_real_io(redis_client, registry, room_id=args.room_id)
     ekf = build_ekf(dynamics)
     mpc = build_mpc(dynamics, shared_params, registry, configs)
-    reference = build_reference(configs)
+    reference = build_reference(configs, registry=registry)
     light_schedule = build_light_schedule(configs)
     forecast = build_forecast(configs)
     compliance = build_compliance(configs)

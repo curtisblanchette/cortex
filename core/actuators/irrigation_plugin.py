@@ -12,9 +12,6 @@ from .base import (
     DispatchSpec, IOMapping,
 )
 
-SUBSTRATE_DEPTH = 0.15  # m
-
-
 class IrrigationPlugin(ActuatorPlugin):
 
     def __init__(self, equipment_config):
@@ -38,14 +35,15 @@ class IrrigationPlugin(ActuatorPlugin):
         ]
 
     def compute_physics(self, x, u_local, d, params, room_props):
-        u_irr = np.clip(u_local[0], 0.0, 100.0) / 100.0
+        u_irr = min(max(u_local[0], 0.0), 100.0) / 100.0
         A_canopy = room_props['A_canopy']
         V = room_props['V']
         rho_air = room_props.get('rho_air', 1.2)
 
         # ml/s -> m3/s, then / (A_canopy * depth) -> m3/m3/s
         irr_vol = self.flow_rate_ml_s * u_irr / 1e6  # m3/s
-        irr_rate_theta = irr_vol / (A_canopy * SUBSTRATE_DEPTH)
+        substrate_depth = room_props.get('substrate_depth_m', 0.15)
+        irr_rate_theta = irr_vol / (A_canopy * substrate_depth)
 
         # Surface evaporation: fraction of irrigation volume -> humidity
         # irr_vol is m3/s of water = 1e6 g/s, convert to g/kg/s in air
