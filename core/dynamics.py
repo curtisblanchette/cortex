@@ -427,7 +427,7 @@ class GrowRoomDynamics:
             10.0,   # w_a: 10 g/kg absolute humidity (~55% RH at 24C)
             800.0,  # C: 800 ppm CO2
             23.0,   # T_l: 23C leaf temp (slightly below air)
-            0.35,   # theta: 0.35 m3/m3 substrate water
+            0.30,   # theta: 0.30 m3/m3 substrate water (nighttime target)
             20.0,   # T_s: 20C supply air
             23.0,   # T_w: 23C wall temp
         ])

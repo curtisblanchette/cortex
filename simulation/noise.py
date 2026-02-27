@@ -29,7 +29,7 @@ DEFAULT_NOISE_CONFIG = {
     'w_a':      {'std': 0.2, 'bias_drift': 0.001, 'quantization': 0.01},
     'CO2':      {'std': 30.0, 'bias_drift': 0.2, 'quantization': 1.0},
     'T_leaf':   {'std': 0.5, 'bias_drift': 0.003, 'quantization': 0.01},
-    'theta':    {'std': 0.01, 'bias_drift': 0.0002, 'quantization': 0.001},
+    'theta':    {'std': 0.01, 'bias_drift': 0.00005, 'quantization': 0.001},
     'T_supply': {'std': 0.3, 'bias_drift': 0.002, 'quantization': 0.01},
 }
 
