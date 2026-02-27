@@ -107,8 +107,8 @@ class SolverProcess:
         # Accumulates persistent tracking error and biases the MPC reference
         # to compensate for systematic linearization mismatch.
         self._T_error_integral = 0.0
-        self._integral_gain = 0.4    # bias per °C·s of accumulated error
-        self._integral_max = 8.0     # max reference bias (°C)
+        self._integral_gain = 0.003  # bias per °C·s of accumulated error
+        self._integral_max = 4.0     # max reference bias (°C)
 
         # Telemetry callback (optional)
         self._telemetry_callback = None
@@ -193,7 +193,7 @@ class SolverProcess:
             # command more cooling than the linear model suggests.
             T_ref = ref_trajectory[0, 1]  # current T target
             T_error = x_hat[0] - T_ref    # positive = too hot
-            dt_solve = self.mpc.step_s * self._mpc_interval
+            dt_solve = float(self._mpc_interval)  # seconds between solves (1 tick = 1s)
             self._T_error_integral += T_error * dt_solve
             self._T_error_integral = np.clip(
                 self._T_error_integral,
