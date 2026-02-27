@@ -23,7 +23,7 @@ room:
   light_schedule:
     on_hour: 6.0
     off_hour: 18.0
-  light_power_W: 50000.0    # total lighting power
+  light_power_W: 18700.0    # total lighting power (56m² canopy × 900 PPFD ÷ 2.7 PPE)
   par_efficiency: 0.4        # fraction of light power that is PAR (rest is heat)
 
   # Outdoor conditions (defaults)

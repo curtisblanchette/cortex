@@ -33,8 +33,8 @@ hvacd:
 standalone_dehumidifier:
   model: Quest 506
   mode: variable
-  capacity_L_hr: 10.0
-  power_draw_W: 2800.0
+  capacity_L_hr: 15.0
+  power_draw_W: 4200.0
   waste_heat_W_per_L_hr: 280.0
   interface: mqtt
   topic: cortex/room1/dehumidifier
