@@ -13,6 +13,7 @@ hvacd:
   heating_capacity_W: 15000.0
   dehumidification_L_hr: 15.0
   supply_airflow_cfm: 3000.0
+  COP: 3.5
   modbus_address: 1
   modbus_port: /dev/ttyUSB0
   modbus_baudrate: 9600
@@ -50,18 +51,21 @@ actuators:
     topic: cortex/room1/co2
     flow_rate_ppm_s: 50.0
     max_pct: 100.0
+    power_draw_W: 50.0
   humidifier:
     type: solenoid
     interface: mqtt
     topic: cortex/room1/humidifier
     capacity_g_hr: 2000.0
     max_pct: 100.0
+    power_draw_W: 200.0
   irrigation:
     type: solenoid
     interface: mqtt
     topic: cortex/room1/irrigation
     flow_rate_ml_s: 50.0
     max_pct: 100.0
+    power_draw_W: 100.0
   heater:
     type: resistive
     interface: mqtt
@@ -73,6 +77,7 @@ actuators:
     interface: modbus
     min_pct: 20.0
     max_pct: 100.0
+    power_draw_W: 750.0
 dispatch:
   cool:
     dead_band: 0.5
@@ -155,6 +160,7 @@ standalone_ac:
   mode: variable
   cooling_capacity_W: 35000.0
   supply_airflow_cfm: 3000.0
+  COP: 3.5
   interface: mqtt
   topic: cortex/room1/ac
   limits:

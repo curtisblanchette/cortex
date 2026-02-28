@@ -113,3 +113,15 @@ class ActuatorPlugin(ABC):
     def default_S_weights(self) -> List[float]:
         """Default MPC S (rate-of-change) weights for each channel."""
         ...
+
+    @abstractmethod
+    def power_draw_W(self, u_local) -> float:
+        """Electrical power draw in watts for the given control input.
+
+        Args:
+            u_local: This plugin's slice of the control vector.
+
+        Returns:
+            Instantaneous electrical power consumption in watts.
+        """
+        ...

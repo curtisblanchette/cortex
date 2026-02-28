@@ -29,7 +29,7 @@ class StandaloneDehumPlugin(ActuatorPlugin):
 
         # Capacity
         self.dehum_max_L_hr = dehum_config.get('capacity_L_hr', 6.0)
-        self.power_draw_W = dehum_config.get('power_draw_W', 2800.0)
+        self.rated_power_W = dehum_config.get('power_draw_W', 2800.0)
         self.waste_heat_W_per_L_hr = dehum_config.get('waste_heat_W_per_L_hr', 280.0)
 
         # MPC bounds from limits
@@ -94,3 +94,7 @@ class StandaloneDehumPlugin(ActuatorPlugin):
 
     def default_S_weights(self):
         return [0.5]
+
+    def power_draw_W(self, u_local):
+        u_dehum = min(max(u_local[0], 0.0), 100.0) / 100.0
+        return u_dehum * self.rated_power_W

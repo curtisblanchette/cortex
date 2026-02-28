@@ -206,3 +206,18 @@ class ActuatorRegistry:
     def actuator_order(self) -> List[str]:
         """Ordered list of actuator names for visualization."""
         return [spec.actuator_name for spec in self.all_dispatch_specs()]
+
+    # ---- Power draw ----
+
+    def power_draw_all(self, u: np.ndarray) -> Dict[str, float]:
+        """Compute power draw for each plugin given the global control vector.
+
+        Returns:
+            Dict mapping plugin name to instantaneous power in watts.
+        """
+        result = {}
+        for plugin in self._plugins:
+            start, end = self._plugin_slices[plugin.name()]
+            u_local = u[start:end]
+            result[plugin.name()] = plugin.power_draw_W(u_local)
+        return result

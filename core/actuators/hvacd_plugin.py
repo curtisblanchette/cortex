@@ -19,6 +19,7 @@ class HVACDPlugin(ActuatorPlugin):
         from core.hvacd import HVACDModel
         hvacd_config = equipment_config.get('hvacd', equipment_config)
         self.hvacd = HVACDModel(hvacd_config)
+        self.COP = hvacd_config.get('COP', 3.5)
 
     def name(self) -> str:
         return 'hvacd'
@@ -95,3 +96,8 @@ class HVACDPlugin(ActuatorPlugin):
 
     def default_S_weights(self):
         return [1.0, 1.0]
+
+    def power_draw_W(self, u_local):
+        # HVACD uses setpoint control — we can't infer load from setpoints alone.
+        # Report rated compressor power as a constant (the HVACD is always running).
+        return self.hvacd.Q_cool_max / self.COP

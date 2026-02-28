@@ -20,6 +20,7 @@ class StandaloneACPlugin(ActuatorPlugin):
         self.Q_cool_max = ac_config.get('cooling_capacity_W', 25000.0)
         self.airflow_cfm = ac_config.get('supply_airflow_cfm', 2000.0)
         self.airflow_m3s = self.airflow_cfm * 0.000471947
+        self.COP = ac_config.get('COP', 3.5)
 
     def name(self) -> str:
         return 'standalone_ac'
@@ -70,3 +71,7 @@ class StandaloneACPlugin(ActuatorPlugin):
 
     def default_S_weights(self):
         return [1.0]
+
+    def power_draw_W(self, u_local):
+        u_cool = min(max(u_local[0], 0.0), 100.0) / 100.0
+        return u_cool * self.Q_cool_max / self.COP

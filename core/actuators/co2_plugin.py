@@ -20,6 +20,7 @@ class CO2InjectorPlugin(ActuatorPlugin):
         actuators = equipment_config.get('actuators', {})
         co2_config = actuators.get('co2', {})
         self.inject_rate = co2_config.get('flow_rate_ppm_s', CO2_INJECT_RATE)
+        self.rated_power_W = co2_config.get('power_draw_W', 50.0)
 
     def name(self) -> str:
         return 'co2_injector'
@@ -51,3 +52,7 @@ class CO2InjectorPlugin(ActuatorPlugin):
 
     def default_S_weights(self):
         return [0.3]
+
+    def power_draw_W(self, u_local):
+        u_co2 = min(max(u_local[0], 0.0), 100.0) / 100.0
+        return (1.0 if u_co2 > 0 else 0.0) * self.rated_power_W

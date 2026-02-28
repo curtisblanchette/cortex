@@ -15,7 +15,9 @@ class TelemetryRecorder:
     # Fallback actuator order (used when no registry provided)
     ACTUATOR_ORDER = ['cool', 'heat', 'co2', 'dehumidifier', 'fan', 'irrigation']
 
-    def __init__(self, registry=None):
+    def __init__(self, registry=None, light_power_W=0.0):
+        self._registry = registry
+        self._light_power_W = light_power_W
         if registry is not None:
             self.ACTUATOR_ORDER = registry.actuator_order()
             self.CHANNEL_NAMES = registry.channel_names
@@ -46,6 +48,7 @@ class TelemetryRecorder:
         self.innovation_rms = []
         self.failsafe = []
         self.dispatch_commands = []  # per-tick gateway dispatched values
+        self.power = []             # per-tick power draw dicts
 
     def record(self, x_hat, u, derived, info, sim_room, ref_targets):
         self.time.append(info['time_s'])
@@ -53,7 +56,8 @@ class TelemetryRecorder:
         self.x_true.append(sim_room.x_true.copy())
         n_u = len(self.ACTUATOR_ORDER) if u is None else len(u)
         self.u.append(u.copy() if u is not None else np.zeros(n_u))
-        self.d.append(sim_room.disturbance_schedule.get(sim_room.time))
+        d = sim_room.disturbance_schedule.get(sim_room.time)
+        self.d.append(d)
         self.vpd.append(derived['VPD'])
         self.rh.append(derived['RH'])
         self.vpd_target.append(ref_targets.get('VPD', 1.2))
@@ -63,6 +67,16 @@ class TelemetryRecorder:
         self.solve_ms.append(info.get('solve_ms', 0))
         self.innovation_rms.append(info.get('innovation_rms', 0))
         self.failsafe.append(info.get('failsafe_level', 'P1_NORMAL'))
+
+        # Power draw per component
+        if self._registry is not None and u is not None:
+            power_dict = self._registry.power_draw_all(u)
+        else:
+            power_dict = {}
+        # Add lighting power (disturbance-driven, not an actuator)
+        lights_on = d[0] > 100  # Q_light > 100W means on
+        power_dict['lights'] = self._light_power_W if lights_on else 0.0
+        self.power.append(power_dict)
 
     def record_dispatch(self, decisions):
         """Record gateway dispatch decisions for this tick.
@@ -78,6 +92,22 @@ class TelemetryRecorder:
         self.dispatch_commands.append(row)
 
     def to_arrays(self):
+        # Build power arrays: (n_ticks, n_components)
+        if self.power:
+            # Stable component order: lights first, then plugins alphabetically
+            all_keys = set()
+            for p in self.power:
+                all_keys.update(p.keys())
+            # Put lights first, then sort the rest
+            power_labels = ['lights'] if 'lights' in all_keys else []
+            power_labels += sorted(k for k in all_keys if k != 'lights')
+            power_array = np.array(
+                [[p.get(k, 0.0) for k in power_labels] for p in self.power]
+            )
+        else:
+            power_labels = []
+            power_array = None
+
         return {
             'time_h': np.array(self.time) / 3600.0,
             'x_hat': np.array(self.x_hat),
@@ -97,18 +127,21 @@ class TelemetryRecorder:
             'dispatch_labels': self.ACTUATOR_ORDER,
             'channel_names': self.CHANNEL_NAMES,
             'dispatch_to_u': self._dispatch_to_u,
+            'power': power_array,
+            'power_labels': power_labels,
         }
 
 
 def plot_simulation(data, compliance_report, duration_s, output_path):
     """Generate a comprehensive multi-panel visualization.
 
-    Layout (5x2 with dispatch, 4x2 without):
+    Layout (dynamic rows):
       Row 1: Temperature tracking      |  VPD tracking
       Row 2: Humidity (RH + w_a)       |  CO2 tracking
-      Row 3: Substrate (\u03b8)             |  MPC control output
-      Row 4: Gateway dispatched cmds   |  Dispatch filtering delta
-      Row 5: MPC diagnostics           |  Compliance summary
+      Row 3: Substrate (theta)         |  Energy usage (stacked area)
+      Row 4: MPC control output        |  (spans full width if no dispatch)
+      Row 5: Gateway dispatched cmds   |  Dispatch filtering delta
+      Row 6: MPC diagnostics           |  Compliance summary
     """
     t = data['time_h']
     x = data['x_hat']
@@ -117,6 +150,8 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     d = data['d']
     dispatch = data.get('dispatch')
     dispatch_labels = data.get('dispatch_labels', [])
+    power = data.get('power')
+    power_labels = data.get('power_labels', [])
 
     # Color palette
     C_ACTUAL = '#2196F3'      # blue
@@ -129,7 +164,10 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     C_LIGHT_ON = '#FFF9C4'    # light yellow
     C_GRID = '#E0E0E0'
 
-    n_rows = 5 if dispatch is not None else 4
+    n_rows = 4  # base: temp, humidity/CO2, substrate/energy, diagnostics/compliance
+    if dispatch is not None:
+        n_rows += 1  # gateway dispatch row
+    n_rows += 1  # control output row
     fig = plt.figure(figsize=(20, 4 * n_rows))
     fig.patch.set_facecolor('#FAFAFA')
 
@@ -228,10 +266,57 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
                       color=C_TOLERANCE, alpha=0.3, zorder=1)
     ax5.legend(loc='upper right', fontsize=8)
     ax5.set_title('Substrate Water Content', fontsize=13, fontweight='bold', pad=6)
-    style_axis(ax5, '\u03b8 (m\u00b3/m\u00b3)', show_xlabel=True)
+    style_axis(ax5, '\u03b8 (m\u00b3/m\u00b3)')
 
-    # ===== Panel 6: Control Actions =====
-    ax6 = fig.add_subplot(gs[2, 1])
+    # ===== Panel 6: Energy Usage =====
+    ax_energy = fig.add_subplot(gs[2, 1])
+    shade_lights(ax_energy, t, d)
+    if power is not None and len(power_labels) > 0:
+        # Component colors for stacked area
+        _energy_colors = {
+            'lights': '#FFD600',
+            'hvacd': '#2196F3',
+            'standalone_ac': '#2196F3',
+            'heater': '#E53935',
+            'standalone_dehumidifier': '#00BCD4',
+            'humidifier': '#4CAF50',
+            'co2_injector': '#9C27B0',
+            'fan': '#607D8B',
+            'irrigation': '#795548',
+        }
+        _energy_labels = {
+            'lights': 'Lights',
+            'hvacd': 'HVACD',
+            'standalone_ac': 'AC',
+            'heater': 'Heater',
+            'standalone_dehumidifier': 'Dehumidifier',
+            'humidifier': 'Humidifier',
+            'co2_injector': 'CO2',
+            'fan': 'Fan',
+            'irrigation': 'Irrigation',
+        }
+        # Convert W to kW for display
+        power_kW = power / 1000.0
+        colors = [_energy_colors.get(k, '#666') for k in power_labels]
+        labels = [_energy_labels.get(k, k) for k in power_labels]
+        ax_energy.stackplot(t, power_kW.T, labels=labels, colors=colors,
+                            alpha=0.8, zorder=2)
+        ax_energy.legend(loc='upper right', fontsize=7, ncol=2)
+
+        # Compute cumulative kWh via trapezoidal integration
+        time_h = data['time_h']
+        total_power_kW = power_kW.sum(axis=1)
+        total_kWh = np.trapz(total_power_kW, time_h)
+        ax_energy.text(0.02, 0.95, f'Total: {total_kWh:.0f} kWh',
+                       transform=ax_energy.transAxes, fontsize=10,
+                       fontweight='bold', va='top',
+                       bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                                 alpha=0.8, edgecolor='#999'))
+    ax_energy.set_title('Energy Usage', fontsize=13, fontweight='bold', pad=6)
+    style_axis(ax_energy, 'Power (kW)')
+
+    # ===== Panel 7: Control Actions (full width) =====
+    ax6 = fig.add_subplot(gs[3, :])
     shade_lights(ax6, t, d)
     channel_names = data.get('channel_names', [])
     _ctrl_colors = [C_ACTUAL, C_CONTROL2, C_CONTROL, C_CONTROL3,
@@ -244,8 +329,8 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     ax6.set_title('MPC Control Output', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax6, 'Setpoint / Output', show_xlabel=True)
 
-    # ===== Panel 7: Gateway Dispatched Commands =====
-    next_row = 3
+    # ===== Panel 8: Gateway Dispatched Commands =====
+    next_row = 4
     if dispatch is not None:
         ax_gw = fig.add_subplot(gs[next_row, 0])
         shade_lights(ax_gw, t, d)

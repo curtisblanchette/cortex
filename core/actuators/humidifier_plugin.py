@@ -18,6 +18,7 @@ class HumidifierPlugin(ActuatorPlugin):
         actuators = equipment_config.get('actuators', {})
         hum_config = actuators.get('humidifier', {})
         self.capacity_g_hr = hum_config.get('capacity_g_hr', 2000.0)
+        self.rated_power_W = hum_config.get('power_draw_W', 200.0)
 
     def name(self) -> str:
         return 'humidifier'
@@ -53,3 +54,7 @@ class HumidifierPlugin(ActuatorPlugin):
 
     def default_S_weights(self):
         return [0.5]
+
+    def power_draw_W(self, u_local):
+        u_hum = min(max(u_local[0], 0.0), 100.0) / 100.0
+        return u_hum * self.rated_power_W

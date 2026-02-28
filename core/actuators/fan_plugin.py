@@ -20,6 +20,7 @@ class FanPlugin(ActuatorPlugin):
         fan_config = actuators.get('fan', {})
         self.min_pct = fan_config.get('min_pct', 20.0)
         self.max_pct = fan_config.get('max_pct', 100.0)
+        self.rated_power_W = fan_config.get('power_draw_W', 750.0)
 
     def name(self) -> str:
         return 'fan'
@@ -56,3 +57,7 @@ class FanPlugin(ActuatorPlugin):
 
     def default_S_weights(self):
         return [0.5]
+
+    def power_draw_W(self, u_local):
+        u_fan = min(max(u_local[0], 0.0), 100.0) / 100.0
+        return u_fan * self.rated_power_W

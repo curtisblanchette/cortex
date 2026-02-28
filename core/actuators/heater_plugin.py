@@ -53,3 +53,7 @@ class HeaterPlugin(ActuatorPlugin):
 
     def default_S_weights(self):
         return [0.5]
+
+    def power_draw_W(self, u_local):
+        u_heat = min(max(u_local[0], 0.0), 100.0) / 100.0
+        return u_heat * self.capacity_W

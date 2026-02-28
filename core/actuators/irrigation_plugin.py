@@ -20,6 +20,7 @@ class IrrigationPlugin(ActuatorPlugin):
         self.flow_rate_ml_s = irr_config.get('flow_rate_ml_s', 50.0)
         # Fraction of irrigation that evaporates directly to air as humidity
         self.evap_fraction = irr_config.get('evap_fraction', 0.05)
+        self.rated_power_W = irr_config.get('power_draw_W', 100.0)
 
     def name(self) -> str:
         return 'irrigation'
@@ -65,3 +66,7 @@ class IrrigationPlugin(ActuatorPlugin):
 
     def default_S_weights(self):
         return [2.0]
+
+    def power_draw_W(self, u_local):
+        u_irr = min(max(u_local[0], 0.0), 100.0) / 100.0
+        return (1.0 if u_irr > 0 else 0.0) * self.rated_power_W

@@ -33,12 +33,12 @@ def run(args):
     _run_decoupled(args)
 
 
-def _maybe_recorder(args, registry=None):
+def _maybe_recorder(args, registry=None, light_power_W=0.0):
     """Create a TelemetryRecorder if --chart was requested."""
     if not args.chart:
         return None
     from cli.visualization import TelemetryRecorder
-    return TelemetryRecorder(registry=registry)
+    return TelemetryRecorder(registry=registry, light_power_W=light_power_W)
 
 
 def _maybe_chart(args, recorder, compliance):
@@ -103,7 +103,10 @@ def _run_decoupled(args):
         light_schedule=light_schedule,
     )
 
-    recorder = _maybe_recorder(args, registry=registry)
+    room_config = configs.get('room', {})
+    disturbances_config = room_config.get('disturbances', room_config)
+    light_power_W = disturbances_config.get('light_power_W', 18700.0)
+    recorder = _maybe_recorder(args, registry=registry, light_power_W=light_power_W)
     report_interval = max(1, args.duration // 20)
     dispatch_summary = {'total': 0, 'dispatched': 0, 'held': 0}
 
