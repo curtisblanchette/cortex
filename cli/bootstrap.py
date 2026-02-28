@@ -14,13 +14,15 @@ def load_yaml(path):
         return yaml.safe_load(f)
 
 
-def load_configs(config_dir='config'):
+def load_configs(config_dir='config', phase_override=None):
     """Load all YAML configs. Returns a dict of config dicts."""
+    room = load_yaml(os.path.join(config_dir, 'room.yaml'))
+    phase_name = phase_override or room.get('room', room).get('phase', 'mid_flower')
     substrate_path = os.path.join(config_dir, 'substrate.yaml')
     return {
-        'room': load_yaml(os.path.join(config_dir, 'room.yaml')),
+        'room': room,
         'equipment': load_yaml(os.path.join(config_dir, 'equipment.yaml')),
-        'phase': load_yaml(os.path.join(config_dir, 'phases', 'mid_flower.yaml')),
+        'phase': load_yaml(os.path.join(config_dir, 'phases', f'{phase_name}.yaml')),
         'cultivar': load_yaml(os.path.join(config_dir, 'cultivar', 'default.yaml')),
         'substrate': load_yaml(substrate_path) if os.path.isfile(substrate_path) else {},
     }

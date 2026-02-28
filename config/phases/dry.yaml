@@ -1,0 +1,56 @@
+phase: dry
+light_hours_per_day: 0
+
+day:
+  VPD_target: 0.7
+  T_target: 20.0
+  CO2_target: 400.0
+  dryback_rate_target: 0.0
+  theta_target: 0.0
+  RH_target: 58.0
+
+night:
+  VPD_target: 0.6
+  T_target: 18.0
+  CO2_target: 400.0
+  dryback_rate_target: 0.0
+  theta_target: 0.0
+  RH_target: 60.0
+
+ramp_minutes: 30
+
+compliance:
+  VPD_tolerance: 0.1
+  T_tolerance: 0.5
+  CO2_tolerance: 100.0
+  theta_tolerance: 0.0
+  RH_tolerance: 3.0
+
+weights:
+  Q:
+    VPD: 8.0
+    T: 60.0              # tight temperature control
+    CO2: 0.0             # no CO2 enrichment
+    dryback: 0.0         # no substrate
+    theta: 0.0           # no substrate
+    RH: 20.0             # tight humidity control
+  R:
+    T_sp: 0.1
+    RH_sp: 0.1
+    u_cool: 0.005
+    u_heat: 0.005
+    u_dehum: 0.003
+    u_hum: 0.003
+    u_co2: 1.0           # heavily penalize CO2 use (shouldn't run)
+    u_fan: 0.003
+    u_irr: 1.0           # heavily penalize irrigation (shouldn't run)
+  S:
+    T_sp: 1.0
+    RH_sp: 1.0
+    u_cool: 0.2
+    u_heat: 0.3
+    u_dehum: 0.2
+    u_hum: 0.2
+    u_co2: 0.1
+    u_fan: 0.1
+    u_irr: 0.1

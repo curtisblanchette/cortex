@@ -1,0 +1,56 @@
+phase: veg
+light_hours_per_day: 18
+
+day:
+  VPD_target: 0.9
+  T_target: 27.0
+  CO2_target: 1100.0
+  dryback_rate_target: 0.0
+  theta_target: 0.38
+  RH_target: 60.0
+
+night:
+  VPD_target: 0.7
+  T_target: 22.0
+  CO2_target: 800.0
+  dryback_rate_target: 0.001
+  theta_target: 0.35
+  RH_target: 65.0
+
+ramp_minutes: 45
+
+compliance:
+  VPD_tolerance: 0.15
+  T_tolerance: 1.5
+  CO2_tolerance: 125.0
+  theta_tolerance: 0.06
+  RH_tolerance: 6.0
+
+weights:
+  Q:
+    VPD: 10.0
+    T: 40.0
+    CO2: 1.0
+    dryback: 2.0
+    theta: 2.0
+    RH: 8.0
+  R:
+    T_sp: 0.1
+    RH_sp: 0.1
+    u_cool: 0.005
+    u_heat: 0.01
+    u_dehum: 0.005
+    u_hum: 0.005
+    u_co2: 0.003
+    u_fan: 0.003
+    u_irr: 0.01
+  S:
+    T_sp: 1.0
+    RH_sp: 1.0
+    u_cool: 0.15
+    u_heat: 0.5
+    u_dehum: 0.2
+    u_hum: 0.1
+    u_co2: 0.05
+    u_fan: 0.1
+    u_irr: 0.2

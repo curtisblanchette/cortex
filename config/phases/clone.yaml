@@ -1,0 +1,56 @@
+phase: clone
+light_hours_per_day: 18
+
+day:
+  VPD_target: 0.6
+  T_target: 25.0
+  CO2_target: 600.0
+  dryback_rate_target: 0.0
+  theta_target: 0.45
+  RH_target: 75.0
+
+night:
+  VPD_target: 0.4
+  T_target: 23.0
+  CO2_target: 400.0
+  dryback_rate_target: 0.001
+  theta_target: 0.45
+  RH_target: 80.0
+
+ramp_minutes: 30
+
+compliance:
+  VPD_tolerance: 0.20
+  T_tolerance: 1.5
+  CO2_tolerance: 150.0
+  theta_tolerance: 0.08
+  RH_tolerance: 8.0
+
+weights:
+  Q:
+    VPD: 8.0
+    T: 30.0
+    CO2: 0.5
+    dryback: 1.0
+    theta: 3.0
+    RH: 15.0
+  R:
+    T_sp: 0.1
+    RH_sp: 0.1
+    u_cool: 0.01
+    u_heat: 0.01
+    u_dehum: 0.01
+    u_hum: 0.003
+    u_co2: 0.01
+    u_fan: 0.005
+    u_irr: 0.02
+  S:
+    T_sp: 1.0
+    RH_sp: 1.0
+    u_cool: 0.2
+    u_heat: 0.5
+    u_dehum: 0.3
+    u_hum: 0.1
+    u_co2: 0.1
+    u_fan: 0.2
+    u_irr: 0.3

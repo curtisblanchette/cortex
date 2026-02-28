@@ -1,0 +1,56 @@
+phase: early_flower
+light_hours_per_day: 12
+
+day:
+  VPD_target: 1.1
+  T_target: 26.0
+  CO2_target: 1200.0
+  dryback_rate_target: 0.0
+  theta_target: 0.36
+  RH_target: 58.0
+
+night:
+  VPD_target: 0.9
+  T_target: 21.0
+  CO2_target: 800.0
+  dryback_rate_target: 0.002
+  theta_target: 0.32
+  RH_target: 62.0
+
+ramp_minutes: 60
+
+compliance:
+  VPD_tolerance: 0.15
+  T_tolerance: 1.0
+  CO2_tolerance: 100.0
+  theta_tolerance: 0.05
+  RH_tolerance: 5.0
+
+weights:
+  Q:
+    VPD: 10.0
+    T: 45.0
+    CO2: 1.0
+    dryback: 2.5
+    theta: 2.0
+    RH: 6.0
+  R:
+    T_sp: 0.1
+    RH_sp: 0.1
+    u_cool: 0.005
+    u_heat: 0.01
+    u_dehum: 0.005
+    u_hum: 0.005
+    u_co2: 0.003
+    u_fan: 0.003
+    u_irr: 0.01
+  S:
+    T_sp: 1.0
+    RH_sp: 1.0
+    u_cool: 0.1
+    u_heat: 0.5
+    u_dehum: 0.2
+    u_hum: 0.1
+    u_co2: 0.05
+    u_fan: 0.1
+    u_irr: 0.2

@@ -1,0 +1,56 @@
+phase: late_flower
+light_hours_per_day: 12
+
+day:
+  VPD_target: 1.3
+  T_target: 24.0
+  CO2_target: 900.0
+  dryback_rate_target: 0.001
+  theta_target: 0.28
+  RH_target: 48.0
+
+night:
+  VPD_target: 1.2
+  T_target: 18.0
+  CO2_target: 600.0
+  dryback_rate_target: 0.003
+  theta_target: 0.25
+  RH_target: 50.0
+
+ramp_minutes: 60
+
+compliance:
+  VPD_tolerance: 0.15
+  T_tolerance: 1.5
+  CO2_tolerance: 125.0
+  theta_tolerance: 0.05
+  RH_tolerance: 3.0
+
+weights:
+  Q:
+    VPD: 12.0
+    T: 40.0
+    CO2: 0.8
+    dryback: 4.0
+    theta: 3.0
+    RH: 15.0            # mold prevention priority
+  R:
+    T_sp: 0.1
+    RH_sp: 0.1
+    u_cool: 0.003
+    u_heat: 0.01
+    u_dehum: 0.003       # allow aggressive dehumidification
+    u_hum: 0.01
+    u_co2: 0.005
+    u_fan: 0.003
+    u_irr: 0.02
+  S:
+    T_sp: 1.0
+    RH_sp: 1.0
+    u_cool: 0.1
+    u_heat: 0.5
+    u_dehum: 0.15        # faster dehum response
+    u_hum: 0.2
+    u_co2: 0.05
+    u_fan: 0.1
+    u_irr: 0.3

@@ -20,6 +20,8 @@ def register(subparsers):
                    help='Config directory')
     p.add_argument('--profile', type=str, default=None,
                    help='Equipment profile override (e.g. ac_dehum, ac_minimal)')
+    p.add_argument('--phase', type=str, default=None,
+                   help='Growth phase override (e.g. clone, veg, early_flower, late_flower, dry)')
     p.add_argument('--substrate', type=str, default=None,
                    help='Substrate profile override (e.g. coco_coir, rockwool, perlite)')
     p.add_argument('--chart', action='store_true',
@@ -57,14 +59,16 @@ def _run_decoupled(args):
     from control.solver_process import SolverProcess, SolutionStore
     from control.gateway import ActuatorGateway
 
+    phase = getattr(args, 'phase', None)
     profile = getattr(args, 'profile', None)
     substrate_name = getattr(args, 'substrate', None)
     print(f"[Cortex] Starting DECOUPLED simulation "
           f"({args.duration}s, fast={args.fast}"
+          f"{f', phase={phase}' if phase else ''}"
           f"{f', profile={profile}' if profile else ''}"
           f"{f', substrate={substrate_name}' if substrate_name else ''})")
 
-    configs = load_configs(args.config)
+    configs = load_configs(args.config, phase_override=phase)
     substrate = build_substrate(configs, substrate_override=substrate_name)
     registry = build_registry(configs, profile_override=profile, substrate=substrate)
     shared_params = build_shared_params(substrate=substrate)
