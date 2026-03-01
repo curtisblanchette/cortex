@@ -54,3 +54,13 @@ weights:
     u_co2: 0.05
     u_fan: 0.1
     u_irr: 0.3
+
+irrigation_schedule:
+  enabled: true
+  first_shot_delay_min: 30
+  last_shot_cutoff_min: 240
+  min_interval_min: 60
+  theta_trigger_fraction: 0.28
+  shot_duration_s: 90
+  max_daily_shots: 10
+  drain_settle_min: 5

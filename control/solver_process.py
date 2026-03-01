@@ -65,7 +65,7 @@ class SolverProcess:
                  failsafe, shared_params, light_schedule, registry,
                  solution_store=None, redis_client=None,
                  room_id='room1', trigger_config=None,
-                 compliance=None):
+                 compliance=None, advisory_engine=None):
         self.io = io
         self.dynamics = dynamics
         self.ekf = ekf
@@ -77,6 +77,7 @@ class SolverProcess:
         self.light_schedule = light_schedule or LightSchedule(6.0, 18.0)
         self.registry = registry
         self.compliance = compliance
+        self.advisory_engine = advisory_engine
 
         # Solution output
         self.solution_store = solution_store or SolutionStore()
@@ -262,6 +263,22 @@ class SolverProcess:
             derived = self.dynamics.derived_outputs(x_hat)
             self.compliance.update(
                 x_hat, derived, self._cached_ref_targets, current_time
+            )
+
+        # Advisory engine (runs on MPC solve cadence, not every tick)
+        if self.advisory_engine and should_solve and trajectory is not None:
+            compliance_report = self.compliance.report() if self.compliance else None
+            self.advisory_engine.evaluate(
+                trajectory=trajectory,
+                x_hat=x_hat,
+                ref_targets=self._cached_ref_targets,
+                solve_info=solve_info,
+                current_time=current_time,
+                light_schedule=self.light_schedule,
+                step_s=self.mpc.step_s,
+                compliance_report=compliance_report,
+                innovation_rms=self.ekf.innovation_magnitude(),
+                innovation_vector=self.ekf.innovation.copy(),
             )
 
         info = {

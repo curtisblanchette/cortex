@@ -55,6 +55,7 @@ class ConstraintBuilder:
         """
         self.n_x = N_STATES
         self.n_u = registry.n_u
+        self._channel_names = list(registry.channel_names)
 
         # State bounds
         self.x_min = np.array([DEFAULT_STATE_BOUNDS[n][0] for n in STATE_NAMES])
@@ -140,3 +141,22 @@ class ConstraintBuilder:
                 else:
                     u[idx_a] = 0.0
         return u
+
+    def lock_channel(self, channel_name, value=0.0):
+        """Lock a control channel to a fixed value.
+
+        Sets u_min, u_max to `value` and du_min, du_max to 0 so the QP
+        cannot move the channel. Used by the irrigation scheduler to prevent
+        MPC from optimizing u_irr while retaining the B-matrix column.
+
+        Args:
+            channel_name: Name of the channel (e.g. 'u_irr').
+            value: Fixed value to lock at (default 0.0).
+        """
+        if channel_name not in self._channel_names:
+            return
+        idx = self._channel_names.index(channel_name)
+        self.u_min[idx] = value
+        self.u_max[idx] = value
+        self.du_min[idx] = 0.0
+        self.du_max[idx] = 0.0

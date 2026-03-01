@@ -6,7 +6,7 @@ from cli.bootstrap import (
     load_configs, build_substrate, build_registry, build_shared_params,
     build_dynamics, build_ekf, build_mpc, build_reference,
     build_light_schedule, build_forecast, build_compliance, build_failsafe,
-    build_simulation_io,
+    build_simulation_io, build_irrigation_scheduler, build_advisory_engine,
 )
 
 
@@ -82,6 +82,20 @@ def _run_decoupled(args):
     compliance = build_compliance(configs)
     failsafe = build_failsafe()
 
+    # Build irrigation scheduler (before MPC so we can lock the channel)
+    irr_scheduler = build_irrigation_scheduler(
+        configs, registry, substrate, light_schedule)
+    if irr_scheduler:
+        mpc.constraints.lock_channel('u_irr', 0.0)
+        print(f"[Cortex] Irrigation scheduler active — "
+              f"theta trigger={irr_scheduler.theta_trigger:.3f}, "
+              f"shot={irr_scheduler.config.shot_duration_s}s, "
+              f"max={irr_scheduler.config.max_daily_shots}/day")
+    else:
+        print("[Cortex] Irrigation scheduler disabled")
+
+    advisory_engine = build_advisory_engine(configs, reference, dynamics)
+
     solution_store = SolutionStore()
 
     solver = SolverProcess(
@@ -97,6 +111,7 @@ def _run_decoupled(args):
         registry=registry,
         solution_store=solution_store,
         compliance=compliance,
+        advisory_engine=advisory_engine,
     )
 
     dispatch_config = configs['equipment'].get('dispatch', {})
@@ -155,6 +170,10 @@ def _run_decoupled(args):
         try:
             solver.solve_once()
 
+            if irr_scheduler:
+                x_hat = solver.ekf.x_hat
+                irr_scheduler.tick(x_hat, solver.io.get_time(), solver.last_u)
+
             decisions = gateway.evaluate_sync()
             for name, result in decisions:
                 dispatch_summary['total'] += 1
@@ -176,8 +195,47 @@ def _run_decoupled(args):
             time.sleep(max(0, 1.0 - 0.025))
 
     _print_compliance(compliance)
+    _print_advisory_summary(advisory_engine)
     _print_dispatch_summary(dispatch_summary, gateway)
+    if irr_scheduler:
+        _print_irrigation_summary(irr_scheduler)
+        if recorder:
+            recorder.irr_events = [
+                (s / 3600.0, e / 3600.0) for s, e in irr_scheduler.shot_log
+            ]
     _maybe_chart(args, recorder, compliance)
+
+
+def _print_advisory_summary(advisory_engine):
+    all_advisories = advisory_engine.all_advisories()
+    if not all_advisories:
+        print("\n[Cortex] Advisories: none generated")
+        return
+
+    by_severity = {}
+    by_type = {}
+    for a in all_advisories:
+        by_severity[a.severity] = by_severity.get(a.severity, 0) + 1
+        key = f'{a.type}:{a.channel}' if a.channel else a.type
+        by_type[key] = by_type.get(key, 0) + 1
+
+    print(f"\n[Cortex] Advisory summary ({len(all_advisories)} total):")
+    for sev in ('critical', 'warning', 'info'):
+        if sev in by_severity:
+            print(f"  {sev:10s}: {by_severity[sev]}")
+    print("  By type:")
+    for key, count in sorted(by_type.items()):
+        print(f"    {key:30s}: {count}")
+
+    print("  Full timeline:")
+    for a in all_advisories:
+        if a.eta_s is not None and a.eta_s >= 3600:
+            eta_str = f'ETA {a.eta_s/3600:.1f}h'
+        elif a.eta_s is not None and a.eta_s > 0:
+            eta_str = f'ETA {int(a.eta_s/60)}m'
+        else:
+            eta_str = 'now'
+        print(f"    [{a.severity:8s}] {a.title} ({eta_str})")
 
 
 def _print_compliance(compliance):
@@ -204,3 +262,16 @@ def _print_dispatch_summary(summary, gateway):
     for name, state in gateway.actuator_state.items():
         print(f"    {name:12s}: command={state.last_command:.2f}  "
               f"events={state.daily_events}")
+
+
+def _print_irrigation_summary(scheduler):
+    s = scheduler.summary()
+    print(f"\n[Cortex] Irrigation summary:")
+    print(f"  Total shots:      {s['total_shots']}")
+    print(f"  Theta trigger:    {s['theta_trigger']:.3f}")
+    if s['total_shots'] > 0:
+        print(f"  Avg duration:     {s['avg_duration_s']:.0f}s")
+        print(f"  Total irrigation: {s['total_irrigation_s']:.0f}s")
+        print(f"  Shot timeline (hours):")
+        for start_h, end_h in s['shots']:
+            print(f"    {start_h:.2f}h - {end_h:.2f}h")

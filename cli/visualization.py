@@ -49,6 +49,7 @@ class TelemetryRecorder:
         self.failsafe = []
         self.dispatch_commands = []  # per-tick gateway dispatched values
         self.power = []             # per-tick power draw dicts
+        self.irr_events = []        # list of (start_h, end_h) from scheduler
 
     def record(self, x_hat, u, derived, info, sim_room, ref_targets):
         self.time.append(info['time_s'])
@@ -129,6 +130,7 @@ class TelemetryRecorder:
             'dispatch_to_u': self._dispatch_to_u,
             'power': power_array,
             'power_labels': power_labels,
+            'irr_events': self.irr_events,
         }
 
 
@@ -264,6 +266,11 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     tol_th = 0.05
     ax5.fill_between(t, data['theta_target'] - tol_th, data['theta_target'] + tol_th,
                       color=C_TOLERANCE, alpha=0.3, zorder=1)
+    # Irrigation shot markers
+    irr_events = data.get('irr_events', [])
+    for i, (start_h, end_h) in enumerate(irr_events):
+        ax5.axvspan(start_h, end_h, color='#4CAF50', alpha=0.3, zorder=1,
+                    label='Irrigation shot' if i == 0 else None)
     ax5.legend(loc='upper right', fontsize=8)
     ax5.set_title('Substrate Water Content', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax5, '\u03b8 (m\u00b3/m\u00b3)')

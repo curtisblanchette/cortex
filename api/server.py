@@ -13,7 +13,8 @@ import numpy as np
 
 
 def create_api(control_loop=None, compliance=None, shared_params=None,
-               calibrator=None, redis_client=None, room_id='room1'):
+               calibrator=None, advisory_engine=None,
+               redis_client=None, room_id='room1'):
     """Create FastAPI application.
 
     In-process mode (simulation / legacy):
@@ -47,6 +48,7 @@ def create_api(control_loop=None, compliance=None, shared_params=None,
     app.state.compliance = compliance
     app.state.params = shared_params
     app.state.calibrator = calibrator
+    app.state.advisory_engine = advisory_engine
     app.state.redis = redis_client
     app.state.room_id = room_id
 
@@ -165,6 +167,24 @@ def create_api(control_loop=None, compliance=None, shared_params=None,
         if not data:
             return {"error": "no_gateway_status"}
         return data
+
+    @app.get("/api/advisories")
+    async def get_advisories():
+        """All advisories (active + resolved)."""
+        engine = app.state.advisory_engine
+        if engine is None:
+            return {"advisories": [], "count": 0}
+        advisories = [a.to_dict() for a in engine.all_advisories()]
+        return {"advisories": advisories, "count": len(advisories)}
+
+    @app.get("/api/advisories/active")
+    async def get_active_advisories():
+        """Active (non-expired, non-resolved) advisories only."""
+        engine = app.state.advisory_engine
+        if engine is None:
+            return {"advisories": [], "count": 0}
+        advisories = [a.to_dict() for a in engine.active_advisories()]
+        return {"advisories": advisories, "count": len(advisories)}
 
     @app.websocket("/ws/dashboard")
     async def dashboard_ws(websocket: WebSocket):

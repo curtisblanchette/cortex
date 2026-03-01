@@ -63,7 +63,7 @@ actuators:
     type: solenoid
     interface: mqtt
     topic: cortex/room1/irrigation
-    flow_rate_ml_s: 50.0
+    flow_rate_ml_s: 5000.0
     max_pct: 100.0
     power_draw_W: 100.0
   heater:

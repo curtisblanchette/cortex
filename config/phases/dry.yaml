@@ -54,3 +54,7 @@ weights:
     u_co2: 0.1
     u_fan: 0.1
     u_irr: 0.1
+
+irrigation_schedule:
+  enabled: false
+  max_daily_shots: 0
