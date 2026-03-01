@@ -10,7 +10,7 @@ day:
   RH_target: 48.0
 
 night:
-  VPD_target: 1.2
+  VPD_target: 0.95
   T_target: 18.0
   CO2_target: 600.0
   dryback_rate_target: 0.003

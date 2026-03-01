@@ -2,7 +2,7 @@ phase: dry
 light_hours_per_day: 0
 
 day:
-  VPD_target: 0.7
+  VPD_target: 0.9
   T_target: 20.0
   CO2_target: 400.0
   dryback_rate_target: 0.0
@@ -10,7 +10,7 @@ day:
   RH_target: 58.0
 
 night:
-  VPD_target: 0.6
+  VPD_target: 0.75
   T_target: 18.0
   CO2_target: 400.0
   dryback_rate_target: 0.0
