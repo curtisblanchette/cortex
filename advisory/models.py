@@ -69,6 +69,7 @@ class Advisory:
     confidence: float = 1.0
     room_id: str = 'room1'
     phase: str = ''
+    sim_time_s: Optional[float] = None  # simulation time in seconds
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     created_at: float = field(default_factory=time.time)
     expires_at: float = 0.0

@@ -50,6 +50,7 @@ class TelemetryRecorder:
         self.dispatch_commands = []  # per-tick gateway dispatched values
         self.power = []             # per-tick power draw dicts
         self.irr_events = []        # list of (start_h, end_h) from scheduler
+        self.advisories = []        # list of Advisory objects from engine
 
     def record(self, x_hat, u, derived, info, sim_room, ref_targets):
         self.time.append(info['time_s'])
@@ -131,6 +132,7 @@ class TelemetryRecorder:
             'power': power_array,
             'power_labels': power_labels,
             'irr_events': self.irr_events,
+            'advisories': self.advisories,
         }
 
 
@@ -166,10 +168,14 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     C_LIGHT_ON = '#FFF9C4'    # light yellow
     C_GRID = '#E0E0E0'
 
+    advisories = data.get('advisories', [])
+
     n_rows = 4  # base: temp, humidity/CO2, substrate/energy, diagnostics/compliance
     if dispatch is not None:
         n_rows += 1  # gateway dispatch row
     n_rows += 1  # control output row
+    if advisories:
+        n_rows += 1  # advisory timeline row
     fig = plt.figure(figsize=(20, 4 * n_rows))
     fig.patch.set_facecolor('#FAFAFA')
 
@@ -418,6 +424,76 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     ax8.set_xlabel('Compliance (%)', fontsize=11)
     ax8.tick_params(labelsize=10)
     ax8.grid(True, axis='x', color=C_GRID, linewidth=0.5, alpha=0.7)
+
+    # ===== Advisory Timeline =====
+    if advisories:
+        next_row += 1
+        ax_adv = fig.add_subplot(gs[next_row, :])
+        ax_adv.set_facecolor('white')
+        shade_lights(ax_adv, t, d)
+
+        _sev_colors = {'critical': '#E53935', 'warning': '#FF9800', 'info': '#2196F3'}
+        _sev_markers = {'critical': 'D', 'warning': 's', 'info': 'o'}
+        _sev_y = {'critical': 3, 'warning': 2, 'info': 1}
+
+        # Short type labels for the chart
+        _type_labels = {
+            'env_breach': 'breach',
+            'env_trend': 'trend',
+            'light_transition': 'lights',
+            'model_drift': 'drift',
+            'solver_degraded': 'solver',
+            'compliance_declining': 'compl',
+        }
+
+        # Stagger overlapping labels — track occupied (y, time_bucket) slots
+        _label_offsets = {}
+        time_bucket_h = max(0.3, t[-1] / 40.0)  # bucket width
+
+        for a in advisories:
+            if a.sim_time_s is None:
+                continue
+            t_h = a.sim_time_s / 3600.0
+            sev = a.severity
+            y = _sev_y.get(sev, 1)
+            color = _sev_colors.get(sev, '#999')
+            marker = _sev_markers.get(sev, 'o')
+
+            # Label: channel if present, else short type name
+            label = a.channel if a.channel else _type_labels.get(a.type, a.type)
+
+            ax_adv.scatter(t_h, y, color=color, marker=marker, s=60, zorder=4,
+                           edgecolors='white', linewidths=0.5)
+
+            # Stagger y-offset for overlapping labels at the same severity
+            bucket = (y, round(t_h / time_bucket_h))
+            count = _label_offsets.get(bucket, 0)
+            _label_offsets[bucket] = count + 1
+            y_off = 6 + count * 10
+
+            ax_adv.annotate(label, (t_h, y), textcoords='offset points',
+                            xytext=(4, y_off), fontsize=6.5, color=color,
+                            alpha=0.9, rotation=30, ha='left', va='bottom')
+
+        ax_adv.set_yticks([1, 2, 3])
+        ax_adv.set_yticklabels(['Info', 'Warning', 'Critical'], fontsize=9)
+        ax_adv.set_ylim(0.3, 3.7)
+        ax_adv.set_title('Advisory Timeline', fontsize=13, fontweight='bold', pad=6)
+        style_axis(ax_adv, '', show_xlabel=True)
+        ax_adv.grid(True, axis='x', color=C_GRID, linewidth=0.5, alpha=0.7)
+        ax_adv.grid(False, axis='y')
+
+        # Legend
+        from matplotlib.lines import Line2D
+        legend_elems = [
+            Line2D([0], [0], marker='D', color='w', markerfacecolor='#E53935',
+                   markersize=8, label='Critical'),
+            Line2D([0], [0], marker='s', color='w', markerfacecolor='#FF9800',
+                   markersize=8, label='Warning'),
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='#2196F3',
+                   markersize=8, label='Info'),
+        ]
+        ax_adv.legend(handles=legend_elems, loc='upper right', fontsize=8, ncol=3)
 
     # Title
     hours = duration_s / 3600

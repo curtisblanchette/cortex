@@ -203,6 +203,8 @@ def _run_decoupled(args):
             recorder.irr_events = [
                 (s / 3600.0, e / 3600.0) for s, e in irr_scheduler.shot_log
             ]
+    if recorder:
+        recorder.advisories = advisory_engine.all_advisories()
     _maybe_chart(args, recorder, compliance)
 
 
@@ -227,15 +229,22 @@ def _print_advisory_summary(advisory_engine):
     for key, count in sorted(by_type.items()):
         print(f"    {key:30s}: {count}")
 
-    print("  Full timeline:")
+    print("  Timeline:")
     for a in all_advisories:
+        # Simulation time
+        if a.sim_time_s is not None:
+            t_h = a.sim_time_s / 3600.0
+            t_str = f'{t_h:5.1f}h'
+        else:
+            t_str = '  ?  '
+        # ETA to predicted event
         if a.eta_s is not None and a.eta_s >= 3600:
             eta_str = f'ETA {a.eta_s/3600:.1f}h'
         elif a.eta_s is not None and a.eta_s > 0:
             eta_str = f'ETA {int(a.eta_s/60)}m'
         else:
             eta_str = 'now'
-        print(f"    [{a.severity:8s}] {a.title} ({eta_str})")
+        print(f"    {t_str} [{a.severity:8s}] {a.title} ({eta_str})")
 
 
 def _print_compliance(compliance):

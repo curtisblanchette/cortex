@@ -132,6 +132,7 @@ class AdvisoryEngine:
             innovation_vector: Raw EKF innovation per sensor (6,), for diagnostics.
         """
         now = time.time()
+        self._current_sim_time = current_time
         self._expire_old(now)
 
         if trajectory is not None and ref_targets is not None:
@@ -407,6 +408,7 @@ class AdvisoryEngine:
             confidence=1.0,
             room_id=self.room_id,
             phase=self.phase_name,
+            sim_time_s=current_time,
         )
         self._active[key] = advisory
         self._history.append(advisory)
@@ -663,6 +665,7 @@ class AdvisoryEngine:
 
     def _emit(self, key, advisory, now):
         """Emit an advisory, respecting cooldowns and severity upgrades."""
+        advisory.sim_time_s = self._current_sim_time
         existing = self._active.get(key)
 
         # Severity upgrade bypasses cooldown
