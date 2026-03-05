@@ -28,6 +28,7 @@ from mpc.reference import ReferenceGenerator, LightSchedule
 from mpc.forecast import DisturbanceForecast
 from control.triggers import SolveTrigger
 from control.failsafe import FailSafeManager
+from core.thermodynamics import saturation_vapor_pressure
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,11 @@ class SolutionStore:
 
     def __init__(self):
         self._solution = None
-        self._lock = asyncio.Lock() if asyncio.get_event_loop().is_running() else None
+        try:
+            loop = asyncio.get_running_loop()
+            self._lock = asyncio.Lock()
+        except RuntimeError:
+            self._lock = None
 
     def publish(self, solution):
         """Write a new solution."""
@@ -104,13 +109,6 @@ class SolverProcess:
         self._cached_fs_level = 'P1_NORMAL'
         self._cached_ref_targets = None
 
-        # Integral action for offset-free tracking.
-        # Accumulates persistent tracking error and biases the MPC reference
-        # to compensate for systematic linearization mismatch.
-        self._T_error_integral = 0.0
-        self._integral_gain = 0.003  # bias per °C·s of accumulated error
-        self._integral_max = 4.0     # max reference bias (°C)
-
         # Telemetry callback (optional)
         self._telemetry_callback = None
 
@@ -145,7 +143,6 @@ class SolverProcess:
         if self._last_lights_on is not None and current_lights != self._last_lights_on:
             self.mpc.force_cold_start()
             self.failsafe.reset()
-            self._T_error_integral = 0.0
             force_solve = True
             logger.info(f"[SolverProcess] Light transition at t={current_time:.0f}s — "
                         f"forcing OSQP cold start + failsafe reset")
@@ -175,6 +172,18 @@ class SolverProcess:
                 horizon_steps=self.mpc.Np, step_s=self.mpc.step_s,
             )
 
+            # Derive VPD-consistent RH targets from current leaf-air offset
+            delta_T_leaf = x_hat[3] - x_hat[0]  # T_leaf - T_air
+            for k in range(ref_trajectory.shape[0]):
+                T_leaf_k = ref_trajectory[k, 1] + delta_T_leaf
+                svp_leaf = saturation_vapor_pressure(T_leaf_k)
+                e_air_needed = svp_leaf - ref_trajectory[k, 0]  # SVP(T_leaf) - VPD
+                svp_air = saturation_vapor_pressure(ref_trajectory[k, 1])
+                if svp_air > 0:
+                    ref_trajectory[k, 5] = np.clip(
+                        100.0 * e_air_needed / svp_air, 30.0, 85.0
+                    )
+
             # Cache UNBIASED reference targets for compliance tracking
             # (must happen before integral bias is applied)
             self._cached_ref_targets = {
@@ -184,27 +193,6 @@ class SolverProcess:
                 'theta': ref_trajectory[0, 4],
                 'RH': ref_trajectory[0, 5],
             }
-
-            # Integral action: bias the T reference to compensate for
-            # persistent model-plant mismatch. The linearized MPC
-            # systematically underestimates cooling needs because its
-            # multi-step predictions overestimate the cooling effect
-            # (phantom overshoot). The integral accumulates tracking
-            # error and shifts the reference downward, making the MPC
-            # command more cooling than the linear model suggests.
-            T_ref = ref_trajectory[0, 1]  # current T target
-            T_error = x_hat[0] - T_ref    # positive = too hot
-            dt_solve = float(self._mpc_interval)  # seconds between solves (1 tick = 1s)
-            self._T_error_integral += T_error * dt_solve
-            self._T_error_integral = np.clip(
-                self._T_error_integral,
-                -self._integral_max / max(self._integral_gain, 1e-6),
-                self._integral_max / max(self._integral_gain, 1e-6),
-            )
-            T_bias = self._integral_gain * self._T_error_integral
-            T_bias = np.clip(T_bias, -self._integral_max, self._integral_max)
-            ref_trajectory = ref_trajectory.copy()
-            ref_trajectory[:, 1] -= T_bias
 
             u_opt, trajectory, solve_info = self.mpc.solve(
                 x_hat, d_forecast, ref_trajectory, u_prev=self.last_u,
@@ -262,7 +250,8 @@ class SolverProcess:
         if self.compliance and self._cached_ref_targets is not None:
             derived = self.dynamics.derived_outputs(x_hat)
             self.compliance.update(
-                x_hat, derived, self._cached_ref_targets, current_time
+                x_hat, derived, self._cached_ref_targets, current_time,
+                lights_on=current_lights,
             )
 
         # Advisory engine (runs on MPC solve cadence, not every tick)
@@ -294,6 +283,7 @@ class SolverProcess:
         # Telemetry
         if self._telemetry_callback:
             derived = self.dynamics.derived_outputs(x_hat)
+            derived['effort'] = self.registry.get_all_effort_metrics()
             self._telemetry_callback(x_hat, self.last_u, derived, info)
 
         return x_hat, self.last_u, trajectory, info
