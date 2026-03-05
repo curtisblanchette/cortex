@@ -5,11 +5,26 @@ Supports two modes:
   - Redis-backed: reads all data from Redis (for standalone `cortex api`)
 """
 
+import asyncio
 import json
+import logging
+import os
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 import numpy as np
+
+from api.simulation_manager import SimulationManager
+
+logger = logging.getLogger(__name__)
+
+
+class SimulateRequest(BaseModel):
+    phase: str | None = None
+    profile: str | None = None
+    substrate: str | None = None
+    duration: int = Field(default=43200, ge=60, le=172800)
 
 
 def create_api(control_loop=None, compliance=None, shared_params=None,
@@ -51,9 +66,31 @@ def create_api(control_loop=None, compliance=None, shared_params=None,
     app.state.advisory_engine = advisory_engine
     app.state.redis = redis_client
     app.state.room_id = room_id
+    app.state.sim_manager = SimulationManager()
+    app.state.event_loop = None
 
-    # WebSocket connections
+    @app.on_event("startup")
+    async def _capture_event_loop():
+        app.state.event_loop = asyncio.get_running_loop()
+
+    # WebSocket connections + broadcast
     ws_clients = set()
+
+    async def broadcast(message: dict):
+        """Send a JSON message to all connected WebSocket clients."""
+        if not ws_clients:
+            return
+        payload = json.dumps(message, default=str)
+        disconnected = set()
+        for ws in ws_clients:
+            try:
+                await ws.send_text(payload)
+            except Exception:
+                disconnected.add(ws)
+        ws_clients.difference_update(disconnected)
+
+    app.state.broadcast = broadcast
+    app.state.ws_clients = ws_clients
 
     @app.get("/api/status")
     async def get_status():
@@ -91,6 +128,10 @@ def create_api(control_loop=None, compliance=None, shared_params=None,
         x_hat = loop.ekf.x_hat.tolist()
         derived = loop.dynamics.derived_outputs(loop.ekf.x_hat)
 
+        effort = {}
+        if hasattr(loop, 'registry') and loop.registry is not None:
+            effort = loop.registry.get_all_effort_metrics()
+
         return {
             "state": {
                 "T_air": x_hat[0],
@@ -103,6 +144,7 @@ def create_api(control_loop=None, compliance=None, shared_params=None,
             },
             "derived": {k: float(v) for k, v in derived.items()},
             "control": loop.last_u.tolist(),
+            "effort": effort,
         }
 
     @app.get("/api/compliance")
@@ -186,6 +228,168 @@ def create_api(control_loop=None, compliance=None, shared_params=None,
         advisories = [a.to_dict() for a in engine.active_advisories()]
         return {"advisories": advisories, "count": len(advisories)}
 
+    @app.get("/api/dashboard/init")
+    async def get_dashboard_init():
+        """Combined initial load for the VPD dashboard."""
+        result = {}
+
+        # State
+        loop = app.state.loop
+        if loop is not None and loop.ekf is not None:
+            x_hat = loop.ekf.x_hat
+            derived = loop.dynamics.derived_outputs(x_hat)
+            result['state'] = {
+                'VPD': round(float(derived.get('VPD', 0)), 3),
+                'T_air': round(float(x_hat[0]), 2),
+                'RH': round(float(derived.get('RH', 0)), 1),
+                'CO2': round(float(x_hat[2]), 1),
+                'theta': round(float(x_hat[4]), 4),
+            }
+        elif app.state.redis:
+            redis_state = _redis_state(app.state.redis, app.state.room_id)
+            result['state'] = redis_state.get('state', {})
+
+        # Compliance
+        if app.state.compliance:
+            result['compliance'] = app.state.compliance.report()
+        elif app.state.redis:
+            result['compliance'] = _redis_compliance(
+                app.state.redis, app.state.room_id)
+
+        # Active advisories
+        engine = app.state.advisory_engine
+        if engine:
+            result['advisories'] = [a.to_dict() for a in engine.active_advisories()]
+        else:
+            result['advisories'] = []
+
+        # Equipment manifest (static channel metadata)
+        if loop is not None and hasattr(loop, 'registry') and loop.registry is not None:
+            reg = loop.registry
+            idx_to_field = reg.index_to_solution_field()
+            manifest = []
+            for i, ch in enumerate(reg._channels):
+                field = idx_to_field.get(i, ch.name)
+                kind = 'setpoint' if ch.name.endswith('_sp') else 'percentage'
+                manifest.append({
+                    'name': ch.name,
+                    'field': field,
+                    'unit': ch.unit,
+                    'bound_low': ch.bound_low,
+                    'bound_high': ch.bound_high,
+                    'default': ch.default,
+                    'kind': kind,
+                })
+            result['equipment_manifest'] = manifest
+
+            # Effort metrics from plugins
+            result['effort'] = reg.get_all_effort_metrics()
+
+            # Current equipment values
+            if hasattr(loop, 'last_u') and loop.last_u is not None:
+                result['equipment'] = [
+                    {'value': round(float(loop.last_u[i]), 2)}
+                    for i in range(reg.n_u)
+                ]
+
+        # Latest trajectory from solution store
+        if loop is not None and hasattr(loop, 'solution_store'):
+            sol = loop.solution_store.read()
+            if sol:
+                for key in ('trajectory_T', 'trajectory_VPD',
+                            'trajectory_RH', 'trajectory_CO2'):
+                    val = sol.get(key)
+                    if isinstance(val, str):
+                        result[key] = json.loads(val)
+                    elif val is not None:
+                        result[key] = val
+                result['sim_time_s'] = sol.get('sim_time', 0)
+        elif app.state.redis:
+            sol_key = f'mpc:{app.state.room_id}:solution'
+            sol = app.state.redis.hgetall(sol_key)
+            if sol:
+                for key in ('trajectory_T', 'trajectory_VPD',
+                            'trajectory_RH', 'trajectory_CO2'):
+                    val = sol.get(key)
+                    if val:
+                        result[key] = json.loads(val)
+
+        return result
+
+    # -- Simulation control endpoints ----------------------------------------
+
+    @app.post("/api/simulate")
+    async def start_simulation(req: SimulateRequest):
+        """Start a simulation from the UI.  Always runs in fast mode."""
+        mgr = app.state.sim_manager
+        if mgr.status == 'running':
+            mgr.stop()
+
+        params = {
+            'phase': req.phase,
+            'profile': req.profile,
+            'substrate': req.substrate,
+            'duration': req.duration,
+            'config_dir': 'config',
+        }
+        mgr.start(params, app)
+        return {"status": "started"}
+
+    @app.get("/api/simulate/status")
+    async def simulation_status():
+        """Current simulation status + progress."""
+        mgr = app.state.sim_manager
+        return {
+            "status": mgr.status,
+            "progress": mgr.progress,
+            "error": mgr.error,
+        }
+
+    @app.post("/api/simulate/stop")
+    async def stop_simulation():
+        """Stop the running simulation."""
+        mgr = app.state.sim_manager
+        mgr.stop()
+        return {"status": mgr.status}
+
+    @app.post("/api/simulate/speed")
+    async def set_simulation_speed(req: dict):
+        """Set simulation speed. speed=0 pauses, speed=-1 is max (no delay)."""
+        mgr = app.state.sim_manager
+        speed = req.get("speed", -1)
+        if speed < 0:
+            mgr.set_speed(float('inf'))
+        else:
+            mgr.set_speed(float(speed))
+        s = mgr.speed
+        return {"speed": -1 if s == float('inf') else s}
+
+    @app.get("/api/simulate/options")
+    async def simulation_options():
+        """Available phases, profiles, substrates, and duration presets."""
+        from core.actuators.factory import PROFILES
+        from core.substrate import SUBSTRATE_PROFILES
+
+        # Discover phase YAML files
+        phase_dir = os.path.join('config', 'phases')
+        phases = []
+        if os.path.isdir(phase_dir):
+            phases = sorted(
+                f.replace('.yaml', '')
+                for f in os.listdir(phase_dir) if f.endswith('.yaml')
+            )
+
+        return {
+            "phases": phases,
+            "profiles": sorted(PROFILES.keys()),
+            "substrates": sorted(SUBSTRATE_PROFILES.keys()),
+            "duration_presets": [
+                {"label": "6h", "seconds": 21600},
+                {"label": "12h", "seconds": 43200},
+                {"label": "24h", "seconds": 86400},
+            ],
+        }
+
     @app.websocket("/ws/dashboard")
     async def dashboard_ws(websocket: WebSocket):
         """WebSocket for live dashboard updates."""
@@ -195,6 +399,8 @@ def create_api(control_loop=None, compliance=None, shared_params=None,
             while True:
                 await websocket.receive_text()
         except WebSocketDisconnect:
+            ws_clients.discard(websocket)
+        except Exception:
             ws_clients.discard(websocket)
 
     return app

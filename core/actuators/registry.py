@@ -141,6 +141,7 @@ class ActuatorRegistry:
             effect = plugin.compute_physics(x, u_local, d, params, props)
 
             total.Q_sensible += effect.Q_sensible
+            total.supply_airflow_W_per_K += effect.supply_airflow_W_per_K
             total.dw_dt += effect.dw_dt
             total.dC_dt += effect.dC_dt
             total.dtheta_dt += effect.dtheta_dt
@@ -206,6 +207,22 @@ class ActuatorRegistry:
     def actuator_order(self) -> List[str]:
         """Ordered list of actuator names for visualization."""
         return [spec.actuator_name for spec in self.all_dispatch_specs()]
+
+    # ---- Effort metrics ----
+
+    def get_all_effort_metrics(self) -> Dict[str, dict]:
+        """Collect effort metrics from plugins that expose them.
+
+        Returns:
+            Dict mapping plugin name to its effort metrics dict.
+        """
+        result = {}
+        for plugin in self._plugins:
+            if hasattr(plugin, 'get_effort_metrics'):
+                metrics = plugin.get_effort_metrics()
+                if metrics:
+                    result[plugin.name()] = metrics
+        return result
 
     # ---- Power draw ----
 

@@ -27,13 +27,16 @@ class PhysicsEffect:
     """Additive physics contribution from one plugin at one timestep.
 
     Each field maps to a state derivative:
-      Q_sensible  -> dT_a/dt (via 1/C_air)
-      dw_dt       -> dw_a/dt (g/kg/s)
-      dC_dt       -> dCO2/dt (ppm/s)
-      dtheta_dt   -> d(theta)/dt (m3/m3/s)
-      T_supply_target -> target for supply temp first-order lag
+      Q_sensible          -> dT_a/dt (via 1/C_air), direct heat (heater, dehum waste)
+      supply_airflow_W_per_K -> convective coupling coeff rho·cp·airflow (W/K);
+                                contributes Q_supply = coeff * (T_supply - T_air) to dT_a/dt
+      dw_dt               -> dw_a/dt (g/kg/s)
+      dC_dt               -> dCO2/dt (ppm/s)
+      dtheta_dt           -> d(theta)/dt (m3/m3/s)
+      T_supply_target     -> target for supply temp first-order lag
     """
     Q_sensible: float = 0.0
+    supply_airflow_W_per_K: float = 0.0
     dw_dt: float = 0.0
     dC_dt: float = 0.0
     dtheta_dt: float = 0.0

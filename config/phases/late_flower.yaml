@@ -1,5 +1,6 @@
 phase: late_flower
 light_hours_per_day: 12
+LAI: 4.0
 
 day:
   VPD_target: 1.3
@@ -7,7 +8,8 @@ day:
   CO2_target: 900.0
   dryback_rate_target: 0.001
   theta_target: 0.28
-  RH_target: 48.0
+  theta_target_frac: 0.60
+  RH_target: 56.0
 
 night:
   VPD_target: 0.95
@@ -15,7 +17,8 @@ night:
   CO2_target: 600.0
   dryback_rate_target: 0.003
   theta_target: 0.25
-  RH_target: 50.0
+  theta_target_frac: 0.50
+  RH_target: 54.0
 
 ramp_minutes: 60
 
@@ -24,16 +27,16 @@ compliance:
   T_tolerance: 1.5
   CO2_tolerance: 125.0
   theta_tolerance: 0.05
-  RH_tolerance: 3.0
+  RH_tolerance: 6.0
 
 weights:
   Q:
-    VPD: 12.0
-    T: 40.0
+    VPD: 50.0
+    T: 15.0
     CO2: 0.8
     dryback: 4.0
     theta: 3.0
-    RH: 15.0            # mold prevention priority
+    RH: 2.0              # near-zero — VPD drives humidity via T_leaf
   R:
     T_sp: 0.1
     RH_sp: 0.1
@@ -61,6 +64,6 @@ irrigation_schedule:
   last_shot_cutoff_min: 240
   min_interval_min: 60
   theta_trigger_fraction: 0.28
-  shot_duration_s: 90
+  shot_duration_s: 12
   max_daily_shots: 10
   drain_settle_min: 5

@@ -1,5 +1,6 @@
 phase: dry
 light_hours_per_day: 0
+LAI: 0.5
 
 day:
   VPD_target: 0.9

@@ -40,7 +40,7 @@ class ComplianceTracker:
         self.total_samples = {key: 0 for key in self.tolerances}
         self.compliant_samples = {key: 0 for key in self.tolerances}
 
-    def update(self, x_hat, derived, reference_targets, time_s):
+    def update(self, x_hat, derived, reference_targets, time_s, lights_on=True):
         """Record one sample.
 
         Args:
@@ -48,6 +48,9 @@ class ComplianceTracker:
             derived: Dict with 'VPD', 'RH', etc. from dynamics.derived_outputs().
             reference_targets: Current reference targets dict.
             time_s: Current time in seconds.
+            lights_on: Whether lights are currently on. During lights-off,
+                       CO2 uses a one-sided tolerance (0 to target + tol)
+                       since injection is disabled and CO2 can only drift down.
         """
         # Map values and targets
         values = {
@@ -67,8 +70,15 @@ class ComplianceTracker:
         }
 
         for key in self.tolerances:
-            error = abs(values[key] - targets[key])
-            in_compliance = error <= self.tolerances[key]
+            val = values[key]
+            tgt = targets[key]
+            tol = self.tolerances[key]
+
+            if key == 'CO2' and not lights_on:
+                # Lights-off: compliant if below upper bound (no lower penalty)
+                in_compliance = val <= tgt + tol
+            else:
+                in_compliance = abs(val - tgt) <= tol
 
             self.buffers[key].append((time_s, values[key], targets[key], in_compliance))
             self.total_samples[key] += 1

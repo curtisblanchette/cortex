@@ -1,15 +1,19 @@
 # Substrate configuration
 # Select a built-in profile or override individual properties.
-# Built-in profiles: coco_coir (default), rockwool, perlite
+# Built-in profiles: coco_coir (default), rockwool, perlite, soil_bed
 
 profile: coco_coir
 
 # Optional property overrides (uncomment to customize)
 # properties:
-#   depth_m: 0.15
+#   container_volume_L: 15.0   # per-plant container volume in liters
 #   theta_fc: 0.40
 #   theta_wp: 0.10
 #   theta_drain: 0.40
 #   K_drain_default: 0.05
 #   K_drain_bounds: [0.005, 0.5]
 #   porosity: 0.95
+#   shot_duration_s: 15.0      # seconds per irrigation event
+#   min_interval_min: 45.0     # minimum minutes between events
+#   drain_settle_min: 5.0      # cooldown after shot for drainage
+#   max_daily_shots: 12        # hard daily cap

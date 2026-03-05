@@ -49,6 +49,7 @@ class TelemetryRecorder:
         self.failsafe = []
         self.dispatch_commands = []  # per-tick gateway dispatched values
         self.power = []             # per-tick power draw dicts
+        self.effort = []            # per-tick effort metrics dicts
         self.irr_events = []        # list of (start_h, end_h) from scheduler
         self.advisories = []        # list of Advisory objects from engine
 
@@ -80,6 +81,9 @@ class TelemetryRecorder:
         power_dict['lights'] = self._light_power_W if lights_on else 0.0
         self.power.append(power_dict)
 
+        # Effort metrics (e.g., HVACD dehum_fraction, cooling_load_pct)
+        self.effort.append(derived.get('effort', {}))
+
     def record_dispatch(self, decisions):
         """Record gateway dispatch decisions for this tick.
 
@@ -110,6 +114,22 @@ class TelemetryRecorder:
             power_labels = []
             power_array = None
 
+        # Build effort arrays: flatten {plugin: {metric: val}} per tick
+        effort_data = {}
+        for tick_effort in self.effort:
+            for plugin_name, metrics in tick_effort.items():
+                for metric_name, val in metrics.items():
+                    key = f'{plugin_name}_{metric_name}'
+                    effort_data.setdefault(key, []).append(val)
+        # Pad any short series (shouldn't happen, but be safe)
+        n_ticks = len(self.time)
+        effort_arrays = {}
+        for key, vals in effort_data.items():
+            arr = np.array(vals)
+            if len(arr) < n_ticks:
+                arr = np.pad(arr, (0, n_ticks - len(arr)), constant_values=0.0)
+            effort_arrays[key] = arr
+
         return {
             'time_h': np.array(self.time) / 3600.0,
             'x_hat': np.array(self.x_hat),
@@ -131,6 +151,7 @@ class TelemetryRecorder:
             'dispatch_to_u': self._dispatch_to_u,
             'power': power_array,
             'power_labels': power_labels,
+            'effort': effort_arrays,
             'irr_events': self.irr_events,
             'advisories': self.advisories,
         }
@@ -169,8 +190,12 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     C_GRID = '#E0E0E0'
 
     advisories = data.get('advisories', [])
+    effort = data.get('effort', {})
 
     n_rows = 4  # base: temp, humidity/CO2, substrate/energy, diagnostics/compliance
+    has_effort = len(effort) > 0
+    if has_effort:
+        n_rows += 1  # HVACD effort row
     if dispatch is not None:
         n_rows += 1  # gateway dispatch row
     n_rows += 1  # control output row
@@ -319,7 +344,7 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
         # Compute cumulative kWh via trapezoidal integration
         time_h = data['time_h']
         total_power_kW = power_kW.sum(axis=1)
-        total_kWh = np.trapz(total_power_kW, time_h)
+        total_kWh = np.trapezoid(total_power_kW, time_h)
         ax_energy.text(0.02, 0.95, f'Total: {total_kWh:.0f} kWh',
                        transform=ax_energy.transAxes, fontsize=10,
                        fontweight='bold', va='top',
@@ -328,8 +353,36 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     ax_energy.set_title('Energy Usage', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax_energy, 'Power (kW)')
 
-    # ===== Panel 7: Control Actions (full width) =====
-    ax6 = fig.add_subplot(gs[3, :])
+    # ===== HVACD Effort Panel =====
+    next_row = 3
+    if has_effort:
+        ax_eff = fig.add_subplot(gs[next_row, :])
+        shade_lights(ax_eff, t, d)
+        _effort_colors = {
+            'hvacd_dehum_fraction': '#00BCD4',
+            'hvacd_cooling_load_pct': '#2196F3',
+        }
+        _effort_labels = {
+            'hvacd_dehum_fraction': 'Dehum Fraction',
+            'hvacd_cooling_load_pct': 'Cooling Load (%)',
+        }
+        for key, arr in effort.items():
+            # Scale dehum_fraction (0–1) to percentage for display
+            if key.endswith('_dehum_fraction'):
+                arr = arr * 100.0
+            ax_eff.plot(t[:len(arr)], arr,
+                        color=_effort_colors.get(key, '#666'),
+                        linewidth=1.0, label=_effort_labels.get(key, key), zorder=3)
+        ax_eff.axhline(100, color=C_TARGET, linewidth=1.2, linestyle='--',
+                        alpha=0.6, label='Saturation (100%)', zorder=2)
+        ax_eff.set_ylim(-5, 115)
+        ax_eff.legend(loc='upper right', fontsize=8)
+        ax_eff.set_title('HVACD Effort', fontsize=13, fontweight='bold', pad=6)
+        style_axis(ax_eff, 'Load (%)')
+        next_row += 1
+
+    # ===== Control Actions (full width) =====
+    ax6 = fig.add_subplot(gs[next_row, :])
     shade_lights(ax6, t, d)
     channel_names = data.get('channel_names', [])
     _ctrl_colors = [C_ACTUAL, C_CONTROL2, C_CONTROL, C_CONTROL3,
@@ -341,9 +394,18 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     ax6.legend(loc='upper right', fontsize=7, ncol=2)
     ax6.set_title('MPC Control Output', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax6, 'Setpoint / Output', show_xlabel=True)
+    next_row += 1
 
-    # ===== Panel 8: Gateway Dispatched Commands =====
-    next_row = 4
+    # ===== Gateway Dispatch =====
+    # Left: actual command sent to hardware per actuator per tick.
+    #   On DISPATCH: result.command = MPC setpoint (possibly rate-limited).
+    #   On HOLD_*:   result.command = state.last_command (previous value held).
+    #   Flat segments indicate holds where dispatch rules refused a change.
+    #
+    # Right: delta = MPC_raw - Gateway_dispatched.
+    #   Positive = gateway suppressed an increase (MPC wanted more).
+    #   Negative = gateway is over-driving (holding a previous higher command
+    #              due to min_hold_s, anti-short-cycle, or dead-band).
     if dispatch is not None:
         ax_gw = fig.add_subplot(gs[next_row, 0])
         shade_lights(ax_gw, t, d)

@@ -25,7 +25,7 @@ class SimulatedRoom:
     def __init__(self, room_config, equipment_config, registry,
                  initial_state=None,
                  sim_params=None, noise_seed=None, max_steps=86400,
-                 start_time_s=None, substrate=None):
+                 start_time_s=None, substrate=None, LAI_ref=3.0):
         """Initialize simulated room.
 
         Args:
@@ -44,7 +44,7 @@ class SimulatedRoom:
         self.registry = registry
         self.dynamics = GrowRoomDynamics(room_config, equipment_config,
                                          self.params, registry=registry,
-                                         substrate=substrate)
+                                         substrate=substrate, LAI_ref=LAI_ref)
 
         # The "true" state of the room (controller never sees this directly)
         if initial_state is not None:

@@ -46,7 +46,8 @@ class ReferenceGenerator:
     Handles day/night transitions with configurable ramp rates.
     """
 
-    def __init__(self, phase_config, cultivar_config=None, registry=None):
+    def __init__(self, phase_config, cultivar_config=None, registry=None,
+                 substrate=None):
         """Initialize from phase and cultivar configs.
 
         Args:
@@ -54,6 +55,9 @@ class ReferenceGenerator:
             cultivar_config: Dict from cultivar/*.yaml with offsets.
             registry: ActuatorRegistry — used to build R/S weights that
                       match the active profile's control vector layout.
+            substrate: SubstrateProfile — theta targets are clamped to
+                       [theta_wp, theta_fc] so unreachable setpoints
+                       don't cause constant irrigation and RH spikes.
         """
         self.n_outputs = N_OUTPUTS
 
@@ -61,12 +65,27 @@ class ReferenceGenerator:
         day = phase_config.get('day', {})
         night = phase_config.get('night', {})
 
+        # Resolve theta targets: fractional (if present + substrate) > absolute > default
+        if substrate is not None and 'theta_target_frac' in day:
+            frac = float(day['theta_target_frac'])
+            awc = substrate.theta_fc - substrate.theta_wp
+            day_theta = substrate.theta_wp + frac * awc
+        else:
+            day_theta = day.get('theta_target', 0.35)
+
+        if substrate is not None and 'theta_target_frac' in night:
+            frac = float(night['theta_target_frac'])
+            awc = substrate.theta_fc - substrate.theta_wp
+            night_theta = substrate.theta_wp + frac * awc
+        else:
+            night_theta = night.get('theta_target', 0.30)
+
         self.day_targets = np.array([
             day.get('VPD_target', 1.2),
             day.get('T_target', 26.0),
             day.get('CO2_target', 1200.0),
             day.get('dryback_rate_target', 0.0),
-            day.get('theta_target', 0.35),
+            day_theta,
             day.get('RH_target', 60.0),
         ])
 
@@ -75,9 +94,22 @@ class ReferenceGenerator:
             night.get('T_target', 22.0),
             night.get('CO2_target', 800.0),
             night.get('dryback_rate_target', 0.002),
-            night.get('theta_target', 0.30),
+            night_theta,
             night.get('RH_target', 55.0),
         ])
+
+        # Clamp theta targets to substrate capacity so the MPC doesn't
+        # chase an unreachable setpoint (e.g., theta=0.35 on perlite
+        # with theta_fc=0.25), which causes constant irrigation + RH spikes.
+        if substrate is not None:
+            theta_lo = substrate.theta_wp
+            theta_hi = substrate.theta_fc
+            self.day_targets[REF_THETA] = np.clip(
+                self.day_targets[REF_THETA], theta_lo, theta_hi,
+            )
+            self.night_targets[REF_THETA] = np.clip(
+                self.night_targets[REF_THETA], theta_lo, theta_hi,
+            )
 
         self.ramp_minutes = phase_config.get('ramp_minutes', 15)
         self.ramp_s = self.ramp_minutes * 60.0

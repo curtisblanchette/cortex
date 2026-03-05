@@ -63,6 +63,10 @@ CO2_AMBIENT = 420.0  # ppm outdoor CO2
 # Infiltration
 ACH_INFILTRATION = 0.1  # air changes per hour from leaks
 
+# Reference plant count at which LAI_ref is defined.
+# Actual N_plants from disturbance vector scales LAI proportionally.
+N_REF_PLANTS = 100.0
+
 class GrowRoomDynamics:
     """The core physics model. Everything else wraps or consumes this.
 
@@ -76,7 +80,7 @@ class GrowRoomDynamics:
     """
 
     def __init__(self, room_config, equipment_config, params=None,
-                 registry=None, substrate=None):
+                 registry=None, substrate=None, LAI_ref=3.0):
         if registry is None:
             raise ValueError(
                 "GrowRoomDynamics requires an ActuatorRegistry. "
@@ -104,6 +108,7 @@ class GrowRoomDynamics:
         self.C_air = self.rho_air * self.cp_air * self.V  # J/K
 
         self.registry = registry
+        self.LAI_ref = LAI_ref
 
         # Pre-stored clip bounds for nonlinear_step (avoids 7 scalar np.clip calls)
         self._clip_lower = np.array([5.0, 0.5, 200.0, 5.0, 0.0, 0.0, 5.0])
@@ -169,14 +174,19 @@ class GrowRoomDynamics:
         Q_light = d[0]
         T_out = d[1]
         w_out = d[2]
+        N_plants = d[3]
 
         UA_wall = params.UA_wall
         UA_env = params.UA_env
         tau_hvac = params.tau_hvac
         g_s_max = params.g_s_max
-        LAI = params.LAI
         K_drain = params.K_drain
         C_wall = params.C_wall
+
+        # Scale LAI by plant count relative to reference density.
+        # LAI_ref is set from phase YAML at N_REF_PLANTS; actual plant count
+        # scales transpiration and canopy heat exchange proportionally.
+        LAI = self.LAI_ref * (N_plants / N_REF_PLANTS) if N_plants > 0 else self.LAI_ref
 
         # ---- Plugin actuator effects ----
         fx = self.registry.compute_all_physics(x, u, d, params)
@@ -205,12 +215,17 @@ class GrowRoomDynamics:
         CO2_infiltration = ach_s * (CO2_AMBIENT - C)
 
         # ---- Substrate dynamics (core physics) ----
-        E_m3 = E_rate / (1e6 * self.substrate.depth_m * 3600.0)
+        V_sub = self.substrate.container_volume_L * N_plants / 1000.0
+        E_m3 = E_rate * self.A_canopy / (1e6 * V_sub * 3600.0)
         drain_rate = K_drain / 3600.0 * max(theta - self.substrate.theta_drain, 0.0)
+
+        # Convective heat exchange from supply air duct
+        Q_supply = fx.supply_airflow_W_per_K * (T_s - T_a)
 
         # ODE 1: dT_a/dt
         dTa = (1.0 / self.C_air) * (
             fx.Q_sensible +
+            Q_supply +
             Q_light * 0.6 +
             Q_infiltration +
             UA_wall * (T_w - T_a) +

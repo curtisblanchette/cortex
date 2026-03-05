@@ -13,7 +13,7 @@ import numpy as np
 from .models import (
     Advisory, SEVERITY_ORDER, DEFAULT_COOLDOWN_S,
     TYPE_ENV_BREACH, TYPE_ENV_TREND, TYPE_LIGHT_TRANSITION, TYPE_MODEL_DRIFT,
-    TYPE_SOLVER_DEGRADED, TYPE_COMPLIANCE_DECLINING,
+    TYPE_SOLVER_DEGRADED, TYPE_COMPLIANCE_DECLINING, TYPE_CO2_FLOW,
     severity_from_eta, confidence_from_step,
 )
 from . import templates
@@ -113,10 +113,13 @@ class AdvisoryEngine:
         self._last_light_bracket = None
         self._last_light_direction = None
 
+        # Optional CO2 scheduler reference for flow diagnostics
+        self.co2_scheduler = None
+
     def evaluate(self, trajectory, x_hat, ref_targets, solve_info,
                  current_time, light_schedule, step_s=60.0,
                  compliance_report=None, innovation_rms=0.0,
-                 innovation_vector=None):
+                 innovation_vector=None, co2_scheduler=None):
         """Run all advisory checks against current solver output.
 
         Args:
@@ -130,6 +133,7 @@ class AdvisoryEngine:
             compliance_report: Optional dict from ComplianceTracker.report().
             innovation_rms: EKF innovation magnitude.
             innovation_vector: Raw EKF innovation per sensor (6,), for diagnostics.
+            co2_scheduler: Optional CO2Scheduler for flow diagnostics.
         """
         now = time.time()
         self._current_sim_time = current_time
@@ -150,6 +154,10 @@ class AdvisoryEngine:
 
         if compliance_report:
             self._check_compliance(compliance_report, now)
+
+        co2_sched = co2_scheduler or self.co2_scheduler
+        if co2_sched is not None:
+            self._check_co2_flow(co2_sched, now)
 
     # -- Public API --
 
@@ -659,6 +667,60 @@ class AdvisoryEngine:
 
             # Healthy — resolve
             if key in self._active:
+                self._active[key].resolved = True
+
+    def _check_co2_flow(self, co2_scheduler, now):
+        """Check CO2 flow rate during injection against expected rate."""
+        from control.co2_scheduler import CO2State
+
+        key = (TYPE_CO2_FLOW, 'co2')
+
+        # Only check when actively injecting and have enough data
+        if co2_scheduler.state != CO2State.INJECTING:
+            # Resolve when not injecting
+            if key in self._active and not self._active[key].resolved:
+                self._active[key].resolved = True
+            return
+
+        observed = co2_scheduler.observed_flow_rate()
+        if observed is None:
+            return
+
+        expected = co2_scheduler.config.expected_flow_ppm_s
+
+        if observed <= 0:
+            # CO2 not rising at all
+            title, body, rec = templates.co2_flow_none()
+            advisory = Advisory(
+                type=TYPE_CO2_FLOW,
+                severity='critical',
+                channel='co2',
+                title=title,
+                body=body,
+                recommendation=rec,
+                confidence=0.8,
+                room_id=self.room_id,
+                phase=self.phase_name,
+            )
+            self._emit(key, advisory, now)
+        elif observed < expected * 0.5:
+            # Flow below 50% of expected
+            title, body, rec = templates.co2_flow_low(observed, expected)
+            advisory = Advisory(
+                type=TYPE_CO2_FLOW,
+                severity='warning',
+                channel='co2',
+                title=title,
+                body=body,
+                recommendation=rec,
+                confidence=0.7,
+                room_id=self.room_id,
+                phase=self.phase_name,
+            )
+            self._emit(key, advisory, now)
+        else:
+            # Healthy flow — resolve
+            if key in self._active and not self._active[key].resolved:
                 self._active[key].resolved = True
 
     # -- Lifecycle management --

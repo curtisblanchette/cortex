@@ -201,6 +201,29 @@ def solver_degraded(status, consecutive_count, confidence):
 
 # --- compliance_declining ---
 
+def co2_flow_low(actual_rate, expected_rate):
+    pct = (actual_rate / expected_rate) * 100 if expected_rate > 0 else 0
+    title = 'CO2 flow below expected'
+    body = (
+        f'CO2 injection rate measured at {actual_rate:.2f} ppm/s '
+        f'({pct:.0f}% of expected {expected_rate:.1f} ppm/s).\n'
+        f'Tank pressure may be low or regulator may need adjustment.'
+    )
+    rec = 'Check CO2 tank gauge and regulator output pressure.'
+    return title, body, rec
+
+
+def co2_flow_none():
+    title = 'CO2 injection not responding'
+    body = (
+        'Solenoid is commanded ON but CO2 level is not rising.\n'
+        'Possible causes: empty tank, closed valve, solenoid failure.'
+    )
+    rec = ('Immediately check CO2 tank level and solenoid operation. '
+           'Verify regulator is not frozen or blocked.')
+    return title, body, rec
+
+
 def compliance_declining(channel, pct, mean, std, min_val, max_val, tolerance):
     title = f'{channel} compliance declining'
     body = (

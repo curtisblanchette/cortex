@@ -1,5 +1,6 @@
 phase: clone
 light_hours_per_day: 18
+LAI: 1.0
 
 day:
   VPD_target: 0.6
@@ -7,7 +8,8 @@ day:
   CO2_target: 600.0
   dryback_rate_target: 0.0
   theta_target: 0.45
-  RH_target: 75.0
+  theta_target_frac: 1.0
+  RH_target: 81.0
 
 night:
   VPD_target: 0.4
@@ -15,7 +17,8 @@ night:
   CO2_target: 400.0
   dryback_rate_target: 0.001
   theta_target: 0.45
-  RH_target: 80.0
+  theta_target_frac: 1.0
+  RH_target: 86.0
 
 ramp_minutes: 30
 
@@ -61,6 +64,6 @@ irrigation_schedule:
   last_shot_cutoff_min: 120
   min_interval_min: 120
   theta_trigger_fraction: 0.05
-  shot_duration_s: 30
+  shot_duration_s: 5
   max_daily_shots: 8
   drain_settle_min: 5

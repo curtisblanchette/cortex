@@ -1,5 +1,6 @@
 phase: veg
 light_hours_per_day: 18
+LAI: 2.5
 
 day:
   VPD_target: 1.05
@@ -7,7 +8,8 @@ day:
   CO2_target: 1100.0
   dryback_rate_target: 0.0
   theta_target: 0.38
-  RH_target: 60.0
+  theta_target_frac: 0.93
+  RH_target: 71.0
 
 night:
   VPD_target: 0.7
@@ -15,7 +17,8 @@ night:
   CO2_target: 800.0
   dryback_rate_target: 0.001
   theta_target: 0.35
-  RH_target: 65.0
+  theta_target_frac: 0.83
+  RH_target: 74.0
 
 ramp_minutes: 45
 
@@ -33,7 +36,7 @@ weights:
     CO2: 1.0
     dryback: 2.0
     theta: 2.0
-    RH: 8.0
+    RH: 10.0
   R:
     T_sp: 0.1
     RH_sp: 0.1
@@ -61,6 +64,6 @@ irrigation_schedule:
   last_shot_cutoff_min: 180
   min_interval_min: 90
   theta_trigger_fraction: 0.12
-  shot_duration_s: 60
+  shot_duration_s: 10
   max_daily_shots: 10
   drain_settle_min: 5

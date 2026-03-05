@@ -11,7 +11,7 @@ from .base import (
     DispatchSpec, IOMapping,
 )
 
-CO2_INJECT_RATE = 50.0  # ppm/s at 100% injection (default)
+CO2_INJECT_RATE = 10.0  # ppm/s at 100% injection (default)
 
 
 class CO2InjectorPlugin(ActuatorPlugin):
@@ -30,7 +30,7 @@ class CO2InjectorPlugin(ActuatorPlugin):
             ControlChannel(
                 name='u_co2', default=0.0, unit='%',
                 bound_low=0.0, bound_high=100.0,
-                du_low=-30.0, du_high=30.0,
+                du_low=-15.0, du_high=15.0,
                 jac_perturbation=0.5,
             ),
         ]

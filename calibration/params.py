@@ -14,16 +14,16 @@ import numpy as np
 
 @dataclass
 class CalibrationParams:
-    """The 8 tunable model parameters.
+    """The 7 tunable model parameters.
 
     These describe the physics of the room and are tuned by SLSQP
     to minimize the gap between model predictions and sensor data.
+    LAI is phase-derived (not tunable) — stored on GrowRoomDynamics.
     """
     UA_wall: float = 50.0       # W/K - wall thermal conductance
     UA_env: float = 25.0        # W/K - envelope conductance to outdoors
     tau_hvac: float = 120.0     # s - HVAC thermal time constant
     g_s_max: float = 0.4        # mol/m²/s - max stomatal conductance
-    LAI: float = 3.0            # m²/m² - leaf area index
     K_drain: float = 0.05       # 1/hr - substrate drainage coefficient
     C_wall: float = 500000.0    # J/K - wall/thermal mass capacitance
     eta_hvac: float = 0.85      # - HVAC efficiency factor
@@ -32,7 +32,7 @@ class CalibrationParams:
         """Convert to numpy array in canonical order."""
         return np.array([
             self.UA_wall, self.UA_env, self.tau_hvac, self.g_s_max,
-            self.LAI, self.K_drain, self.C_wall, self.eta_hvac,
+            self.K_drain, self.C_wall, self.eta_hvac,
         ])
 
     @classmethod
@@ -43,10 +43,9 @@ class CalibrationParams:
             UA_env=float(arr[1]),
             tau_hvac=float(arr[2]),
             g_s_max=float(arr[3]),
-            LAI=float(arr[4]),
-            K_drain=float(arr[5]),
-            C_wall=float(arr[6]),
-            eta_hvac=float(arr[7]),
+            K_drain=float(arr[4]),
+            C_wall=float(arr[5]),
+            eta_hvac=float(arr[6]),
         )
 
     def to_dict(self) -> dict:
@@ -59,7 +58,7 @@ class CalibrationParams:
 
 PARAM_NAMES = [
     'UA_wall', 'UA_env', 'tau_hvac', 'g_s_max',
-    'LAI', 'K_drain', 'C_wall', 'eta_hvac',
+    'K_drain', 'C_wall', 'eta_hvac',
 ]
 
 N_PARAMS = len(PARAM_NAMES)

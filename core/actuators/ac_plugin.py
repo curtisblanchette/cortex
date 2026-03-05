@@ -42,18 +42,24 @@ class StandaloneACPlugin(ActuatorPlugin):
 
         u_cool = min(max(u_local[0], 0.0), 100.0) / 100.0
         airflow = self.airflow_m3s * fan_pct
+        rho_air = room_props.get('rho_air', 1.2)
 
-        Q_sensible = -u_cool * self.Q_cool_max * eta
+        # Convective coupling coefficient
+        supply_airflow_W_per_K = rho_air * 1005.0 * airflow
 
-        # Compute supply temp target from sensible heat
-        rho_cp_flow = 1.2 * 1005.0 * airflow
-        if rho_cp_flow > 0:
-            T_supply_target = T_a + Q_sensible / rho_cp_flow
+        # Compute supply temp target from cooling capacity
+        Q_cool = -u_cool * self.Q_cool_max * eta
+        if supply_airflow_W_per_K > 0:
+            T_supply_target = T_a + Q_cool / supply_airflow_W_per_K
         else:
             T_supply_target = T_a
 
+        # Clamp to physical coil limits
+        T_supply_target = max(5.0, min(T_supply_target, 50.0))
+
         return PhysicsEffect(
-            Q_sensible=Q_sensible,
+            Q_sensible=0.0,
+            supply_airflow_W_per_K=supply_airflow_W_per_K,
             T_supply_target=T_supply_target,
         )
 

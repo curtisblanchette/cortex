@@ -10,7 +10,6 @@ PARAM_BOUNDS = {
     'UA_env':   (5.0, 100.0),      # W/K
     'tau_hvac': (30.0, 600.0),     # s
     'g_s_max':  (0.05, 1.0),       # mol/m²/s
-    'LAI':      (0.5, 8.0),        # m²/m²
     'K_drain':  (0.005, 0.5),      # 1/hr
     'C_wall':   (50000.0, 5e6),    # J/K
     'eta_hvac': (0.3, 1.0),        # -

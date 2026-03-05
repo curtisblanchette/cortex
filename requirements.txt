@@ -4,6 +4,6 @@ osqp>=0.6.3
 numba>=0.58
 pyyaml>=6.0
 fastapi>=0.104
-uvicorn>=0.24
+uvicorn[standard]>=0.24
 redis>=5.0
 paho-mqtt>=1.6

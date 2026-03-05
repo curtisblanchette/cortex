@@ -41,10 +41,12 @@ class IrrigationPlugin(ActuatorPlugin):
         V = room_props['V']
         rho_air = room_props.get('rho_air', 1.2)
 
-        # ml/s -> m3/s, then / (A_canopy * depth) -> m3/m3/s
+        # ml/s -> m3/s, then / V_sub -> m3/m3/s
         irr_vol = self.flow_rate_ml_s * u_irr / 1e6  # m3/s
-        substrate_depth = room_props.get('substrate_depth_m', 0.15)
-        irr_rate_theta = irr_vol / (A_canopy * substrate_depth)
+        container_vol_L = room_props.get('container_volume_L', 15.0)
+        N_plants = d[3]
+        V_sub = container_vol_L * N_plants / 1000.0  # m3
+        irr_rate_theta = irr_vol / V_sub
 
         # Surface evaporation: fraction of irrigation volume -> humidity
         # irr_vol is m3/s of water = 1e6 g/s, convert to g/kg/s in air

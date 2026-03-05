@@ -75,7 +75,8 @@ python -m pytest tests/
 ```
 
 ## Preferences
-
+- Don't work in ~/code/esp/my-esp32-project/apps/cortex - this is the legacy version.
+- The web app is in ~/code/esp/my-esp32-project/apps/web
 - simulations are run using this format
 ```
 python main.py simulate \

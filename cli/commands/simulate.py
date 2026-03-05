@@ -6,7 +6,8 @@ from cli.bootstrap import (
     load_configs, build_substrate, build_registry, build_shared_params,
     build_dynamics, build_ekf, build_mpc, build_reference,
     build_light_schedule, build_forecast, build_compliance, build_failsafe,
-    build_simulation_io, build_irrigation_scheduler, build_advisory_engine,
+    build_simulation_io, build_irrigation_scheduler, build_co2_scheduler,
+    build_advisory_engine,
 )
 
 
@@ -28,11 +29,35 @@ def register(subparsers):
                    help='Generate visualization chart on completion')
     p.add_argument('--chart-output', type=str, default='output/simulation.png',
                    help='Output path for chart (default: output/simulation.png)')
+    p.add_argument('--dashboard', action='store_true',
+                   help='Start API server for live VPD dashboard')
+    p.add_argument('--api-port', type=int, default=8080,
+                   help='API server port for dashboard (default: 8080)')
+    p.add_argument('--wait', action='store_true',
+                   help='Start API server idle — simulations triggered from UI')
     p.set_defaults(func=run)
 
 
 def run(args):
-    _run_decoupled(args)
+    if getattr(args, 'wait', False) and getattr(args, 'dashboard', False):
+        _run_wait_mode(args)
+    else:
+        _run_decoupled(args)
+
+
+def _run_wait_mode(args):
+    """Start the API server idle — simulations are triggered from the UI."""
+    import uvicorn
+    from api.server import create_api
+
+    port = getattr(args, 'api_port', 8080)
+    app = create_api()
+
+    print(f"[Cortex] Dashboard API started on http://localhost:{port}")
+    print(f"[Cortex] WebSocket at ws://localhost:{port}/ws/dashboard")
+    print("[Cortex] Waiting for simulation trigger from UI...")
+
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
 
 
 def _maybe_recorder(args, registry=None, light_power_W=0.0):
@@ -74,9 +99,9 @@ def _run_decoupled(args):
     shared_params = build_shared_params(substrate=substrate)
     dynamics = build_dynamics(configs, shared_params, registry, substrate=substrate)
     io, sim_room = build_simulation_io(configs, registry, substrate=substrate)
-    ekf = build_ekf(dynamics)
+    ekf = build_ekf(dynamics, substrate=substrate)
     mpc = build_mpc(dynamics, shared_params, registry, configs)
-    reference = build_reference(configs, registry=registry)
+    reference = build_reference(configs, registry=registry, substrate=substrate)
     light_schedule = build_light_schedule(configs)
     forecast = build_forecast(configs)
     compliance = build_compliance(configs)
@@ -94,7 +119,19 @@ def _run_decoupled(args):
     else:
         print("[Cortex] Irrigation scheduler disabled")
 
+    # Build CO2 scheduler (before MPC so we can lock the channel)
+    co2_scheduler = build_co2_scheduler(configs, registry, light_schedule, reference)
+    if co2_scheduler:
+        mpc.constraints.lock_channel('u_co2', 0.0)
+        print(f"[Cortex] CO2 scheduler active — "
+              f"deadband={co2_scheduler.config.deadband_ppm:.0f}ppm, "
+              f"holdoff={co2_scheduler.config.min_off_s:.0f}s")
+    else:
+        print("[Cortex] CO2 scheduler disabled (no u_co2 channel)")
+
     advisory_engine = build_advisory_engine(configs, reference, dynamics)
+    if co2_scheduler:
+        advisory_engine.co2_scheduler = co2_scheduler
 
     solution_store = SolutionStore()
 
@@ -129,6 +166,13 @@ def _run_decoupled(args):
     report_interval = max(1, args.duration // 20)
     dispatch_summary = {'total': 0, 'dispatched': 0, 'held': 0}
 
+    # Dashboard API + WebSocket broadcaster
+    broadcaster = None
+    if getattr(args, 'dashboard', False):
+        broadcaster = _start_dashboard(
+            args, solver, dynamics, reference, compliance,
+            advisory_engine, mpc, light_schedule, registry)
+
     def telemetry_cb(x_hat, u, derived, info):
         if recorder:
             ref = reference.generate(
@@ -139,6 +183,9 @@ def _run_decoupled(args):
                 'RH': ref[0, 5],
             }
             recorder.record(x_hat, u, derived, info, sim_room, ref_targets)
+
+        if broadcaster:
+            broadcaster.on_telemetry(x_hat, u, derived, info)
 
         tick = info['tick']
         if tick % report_interval == 0:
@@ -170,9 +217,25 @@ def _run_decoupled(args):
         try:
             solver.solve_once()
 
+            # Feed trajectory to broadcaster when a solve happened
+            if broadcaster and solver._cached_trajectory is not None:
+                ref_targets = solver._cached_ref_targets or {}
+                tolerances = {}
+                if compliance:
+                    tolerances = compliance.tolerances
+                broadcaster.notify_solve(
+                    solver._cached_trajectory,
+                    solver.io.get_time(),
+                    ref_targets,
+                    tolerances,
+                )
+
             if irr_scheduler:
                 x_hat = solver.ekf.x_hat
                 irr_scheduler.tick(x_hat, solver.io.get_time(), solver.last_u)
+
+            if co2_scheduler:
+                co2_scheduler.tick(solver.ekf.x_hat, solver.io.get_time(), solver.last_u)
 
             decisions = gateway.evaluate_sync()
             for name, result in decisions:
@@ -197,6 +260,8 @@ def _run_decoupled(args):
     _print_compliance(compliance)
     _print_advisory_summary(advisory_engine)
     _print_dispatch_summary(dispatch_summary, gateway)
+    if co2_scheduler:
+        _print_co2_summary(co2_scheduler)
     if irr_scheduler:
         _print_irrigation_summary(irr_scheduler)
         if recorder:
@@ -206,6 +271,60 @@ def _run_decoupled(args):
     if recorder:
         recorder.advisories = advisory_engine.all_advisories()
     _maybe_chart(args, recorder, compliance)
+
+
+def _start_dashboard(args, solver, dynamics, reference, compliance,
+                     advisory_engine, mpc, light_schedule, registry=None):
+    """Start the dashboard API server in a background thread."""
+    import asyncio
+    import threading
+    import uvicorn
+    from api.server import create_api
+    from api.broadcast import WebSocketBroadcaster
+
+    port = getattr(args, 'api_port', 8080)
+
+    app = create_api(
+        control_loop=solver,
+        compliance=compliance,
+        advisory_engine=advisory_engine,
+    )
+
+    broadcaster = WebSocketBroadcaster(
+        app=app,
+        dynamics=dynamics,
+        reference=reference,
+        compliance=compliance,
+        advisory_engine=advisory_engine,
+        registry=registry,
+        mpc_step_s=mpc.step_s,
+        mpc_interval=int(mpc.step_s),
+        light_schedule=light_schedule,
+    )
+
+    # Capture uvicorn's actual running event loop for async broadcasting
+    ready = threading.Event()
+
+    @app.on_event("startup")
+    async def _capture_event_loop():
+        broadcaster.set_event_loop(asyncio.get_running_loop())
+        ready.set()
+
+    def run_server():
+        config = uvicorn.Config(
+            app, host="0.0.0.0", port=port,
+            log_level="warning",
+        )
+        server = uvicorn.Server(config)
+        server.run()
+
+    thread = threading.Thread(target=run_server, daemon=True)
+    thread.start()
+    ready.wait(timeout=10.0)
+    print(f"[Cortex] Dashboard API started on http://localhost:{port}")
+    print(f"[Cortex] WebSocket at ws://localhost:{port}/ws/dashboard")
+
+    return broadcaster
 
 
 def _print_advisory_summary(advisory_engine):
@@ -271,6 +390,20 @@ def _print_dispatch_summary(summary, gateway):
     for name, state in gateway.actuator_state.items():
         print(f"    {name:12s}: command={state.last_command:.2f}  "
               f"events={state.daily_events}")
+
+
+def _print_co2_summary(scheduler):
+    s = scheduler.summary()
+    print(f"\n[Cortex] CO2 injection summary:")
+    print(f"  Total cycles:      {s['total_cycles']}")
+    if s['total_cycles'] > 0:
+        print(f"  Avg cycle duration: {s['avg_cycle_s']:.0f}s")
+        print(f"  Total on-time:     {s['total_on_time_s']:.0f}s")
+        obs = s['observed_flow_ppm_s']
+        if obs is not None:
+            expected = scheduler.config.expected_flow_ppm_s
+            pct = (obs / expected) * 100 if expected > 0 else 0
+            print(f"  Observed flow:     {obs:.2f} ppm/s ({pct:.0f}% of expected {expected:.1f})")
 
 
 def _print_irrigation_summary(scheduler):

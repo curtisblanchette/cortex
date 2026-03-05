@@ -35,6 +35,7 @@ class HVACDModel:
         self.RH_sp_max = limits.get('RH_sp_max', 80.0)
         self.fan_min = limits.get('fan_min_pct', 20.0)
         self.fan_max = limits.get('fan_max_pct', 100.0)
+        self.dehum_band = config.get('dehum_proportional_band', 5.0)
 
         # Airflow in m³/s (from CFM)
         self.airflow_m3s = self.airflow_cfm * 0.000471947

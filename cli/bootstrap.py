@@ -64,17 +64,21 @@ def build_shared_params(substrate=None):
 def build_dynamics(configs, shared_params, registry, substrate=None):
     """Build GrowRoomDynamics from configs."""
     from core.dynamics import GrowRoomDynamics
+    LAI_ref = configs['phase'].get('LAI', 3.0)
     return GrowRoomDynamics(configs['room'], configs['equipment'],
                             shared_params, registry=registry,
-                            substrate=substrate)
+                            substrate=substrate, LAI_ref=LAI_ref)
 
 
-def build_ekf(dynamics):
+def build_ekf(dynamics, substrate=None):
     """Build and initialize the EKF."""
     from estimation.ekf import StateEstimator
     from core.dynamics import GrowRoomDynamics
     ekf = StateEstimator(dynamics)
-    ekf.initialize(GrowRoomDynamics.default_initial_state())
+    x0 = GrowRoomDynamics.default_initial_state()
+    if substrate is not None:
+        x0[4] = substrate.theta_fc * 0.92  # "just watered, settling"
+    ekf.initialize(x0)
     return ekf
 
 
@@ -87,11 +91,11 @@ def build_mpc(dynamics, shared_params, registry, configs):
                      constraints=constraints, step_s=30.0)
 
 
-def build_reference(configs, registry=None):
+def build_reference(configs, registry=None, substrate=None):
     """Build ReferenceGenerator."""
     from mpc.reference import ReferenceGenerator
     return ReferenceGenerator(configs['phase'], configs['cultivar'],
-                              registry=registry)
+                              registry=registry, substrate=substrate)
 
 
 def build_light_schedule(configs):
@@ -131,8 +135,14 @@ def build_simulation_io(configs, registry, substrate=None):
     """Build SimulatedRoom + SimulatedIO. Returns (io, sim_room)."""
     from simulation.room import SimulatedRoom
     from control.io import SimulatedIO
+    from core.dynamics import GrowRoomDynamics
+    LAI_ref = configs['phase'].get('LAI', 3.0)
+    initial_state = GrowRoomDynamics.default_initial_state()
+    if substrate is not None:
+        initial_state[4] = substrate.theta_fc * 0.92
     sim_room = SimulatedRoom(configs['room'], configs['equipment'],
-                              registry, noise_seed=42, substrate=substrate)
+                              registry, noise_seed=42, substrate=substrate,
+                              LAI_ref=LAI_ref, initial_state=initial_state)
     io = SimulatedIO(sim_room)
     return io, sim_room
 
@@ -141,6 +151,34 @@ def build_real_io(redis_client, registry, room_id='room1'):
     """Build RealIO for production."""
     from control.io import RealIO
     return RealIO(redis_client, registry, room_id=room_id)
+
+
+def build_co2_scheduler(configs, registry, light_schedule, reference):
+    """Build CO2Scheduler from configs.
+
+    Returns CO2Scheduler or None if u_co2 is not in the active profile.
+    """
+    if 'u_co2' not in registry.channel_names:
+        return None
+
+    from control.co2_scheduler import CO2Config, CO2Scheduler
+
+    equip = configs['equipment']
+    actuators = equip.get('actuators', {})
+    co2_equip = actuators.get('co2', {})
+
+    config = CO2Config(
+        deadband_ppm=co2_equip.get('deadband_ppm', 50.0),
+        min_off_s=co2_equip.get('min_off_s', 30.0),
+        expected_flow_ppm_s=co2_equip.get('flow_rate_ppm_s', 10.0),
+    )
+
+    return CO2Scheduler(
+        config=config,
+        registry=registry,
+        light_schedule=light_schedule,
+        reference=reference,
+    )
 
 
 def build_irrigation_scheduler(configs, registry, substrate, light_schedule):
@@ -168,11 +206,11 @@ def build_irrigation_scheduler(configs, registry, substrate, light_schedule):
         enabled=irr_cfg['enabled'],
         first_shot_delay_s=irr_cfg.get('first_shot_delay_min', 30) * 60.0,
         last_shot_cutoff_s=irr_cfg.get('last_shot_cutoff_min', 180) * 60.0,
-        min_interval_s=irr_cfg.get('min_interval_min', 45) * 60.0,
+        min_interval_s=irr_cfg.get('min_interval_min', substrate.min_interval_min) * 60.0,
         theta_trigger_fraction=irr_cfg.get('theta_trigger_fraction', 0.15),
-        shot_duration_s=irr_cfg.get('shot_duration_s', 90),
-        max_daily_shots=irr_cfg.get('max_daily_shots', 12),
-        drain_settle_s=irr_cfg.get('drain_settle_min', 5) * 60.0,
+        shot_duration_s=irr_cfg.get('shot_duration_s', substrate.shot_duration_s),
+        max_daily_shots=irr_cfg.get('max_daily_shots', substrate.max_daily_shots),
+        drain_settle_s=irr_cfg.get('drain_settle_min', substrate.drain_settle_min) * 60.0,
     )
 
     # Get equipment-level defaults

@@ -20,6 +20,7 @@ TYPE_LIGHT_TRANSITION = 'light_transition'
 TYPE_MODEL_DRIFT = 'model_drift'
 TYPE_SOLVER_DEGRADED = 'solver_degraded'
 TYPE_COMPLIANCE_DECLINING = 'compliance_declining'
+TYPE_CO2_FLOW = 'co2_flow'
 
 # Channels
 CHANNELS = ('VPD', 'T', 'RH', 'CO2', 'theta')
@@ -32,6 +33,7 @@ DEFAULT_TTLS = {
     TYPE_MODEL_DRIFT: 300,
     TYPE_SOLVER_DEGRADED: 300,
     TYPE_COMPLIANCE_DECLINING: 900,
+    TYPE_CO2_FLOW: 600,
 }
 
 # Cooldown before re-firing same (type, channel) pair

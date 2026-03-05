@@ -45,6 +45,7 @@ class WebSocketBroadcaster:
             return
 
         self._last_u = u
+        self._last_effort = derived.get('effort', {})
         self._tick_count += 1
         time_s = info.get('time_s', 0)
 
@@ -120,6 +121,7 @@ class WebSocketBroadcaster:
                 'solve_ms': round(info.get('solve_ms', 0), 1),
                 'failsafe_level': info.get('failsafe_level', 'unknown'),
                 'equipment': equipment,
+                'effort': getattr(self, '_last_effort', {}),
             },
         }
 

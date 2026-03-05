@@ -11,7 +11,8 @@ hvacd:
   mode: setpoint
   cooling_capacity_W: 35000.0
   heating_capacity_W: 15000.0
-  dehumidification_L_hr: 15.0
+  dehumidification_L_hr: 25.0
+  dehum_proportional_band: 20.0
   supply_airflow_cfm: 3000.0
   COP: 3.5
   modbus_address: 1
@@ -49,9 +50,11 @@ actuators:
     type: solenoid
     interface: mqtt
     topic: cortex/room1/co2
-    flow_rate_ppm_s: 50.0
+    flow_rate_ppm_s: 10.0
     max_pct: 100.0
     power_draw_W: 50.0
+    deadband_ppm: 50.0
+    min_off_s: 30.0
   humidifier:
     type: solenoid
     interface: mqtt

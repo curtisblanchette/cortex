@@ -117,7 +117,6 @@ def scenario_parameter_mismatch():
         UA_env=35.0,       # 40% higher
         tau_hvac=180.0,    # 50% slower HVAC
         g_s_max=0.5,       # 25% more transpiration
-        LAI=4.0,           # bigger canopy
         K_drain=0.08,      # faster drainage
         C_wall=700000.0,   # more thermal mass
         eta_hvac=0.75,     # less efficient HVAC

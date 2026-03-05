@@ -20,6 +20,7 @@ class HVACDPlugin(ActuatorPlugin):
         hvacd_config = equipment_config.get('hvacd', equipment_config)
         self.hvacd = HVACDModel(hvacd_config)
         self.COP = hvacd_config.get('COP', 3.5)
+        self._last_effort = {}
 
     def name(self) -> str:
         return 'hvacd'
@@ -54,27 +55,51 @@ class HVACDPlugin(ActuatorPlugin):
             T_a, w_a, T_s, u_hvacd, params
         )
 
+        # Clamp T_supply_target to physical coil limits
+        T_s_target = max(5.0, min(T_s_target, 50.0))
+
+        # Convective coupling: heat enters room through supply air, not directly.
+        # Q_supply = rho * cp * airflow * (T_supply - T_air) is computed in dynamics.py.
+        airflow = self.hvacd.airflow_m3s * fan_pct
+        rho_air = room_props.get('rho_air', 1.2)
+        supply_airflow_W_per_K = rho_air * 1005.0 * airflow
+
         # Recompute moisture removal using room volume.
         # HVACDModel divides by airflow mass (rho*airflow*1000) instead of
         # room air mass (rho*V), making dehumidification ~5x too weak.
         # Use the same formula as StandaloneDehumPlugin for consistency.
         V = room_props['V']
-        rho_air = room_props.get('rho_air', 1.2)
         RH_sp = min(max(u_local[1], self.hvacd.RH_sp_min), self.hvacd.RH_sp_max)
         RH = self.hvacd._compute_rh(T_a, w_a)
         RH_error = RH - RH_sp
         if RH_error > 0:
-            dehum_fraction = min(RH_error / 20.0, 1.0)
+            dehum_fraction = min(RH_error / self.hvacd.dehum_band, 1.0)
             dehum_L_hr = self.hvacd.dehum_max * dehum_fraction
             w_removal = dehum_L_hr * 1000.0 / (rho_air * V) / 3600.0
         else:
+            dehum_fraction = 0.0
             w_removal = 0.0
 
+        # Cache effort metrics for telemetry
+        # Estimate cooling load from supply-air delta-T vs max capacity
+        delta_T = T_a - T_s_target
+        Q_estimate = supply_airflow_W_per_K * delta_T
+        cooling_load_pct = abs(Q_estimate) / self.hvacd.Q_cool_max * 100.0 if delta_T > 0 else 0.0
+        self._last_effort = {
+            'dehum_fraction': dehum_fraction,
+            'cooling_load_pct': min(cooling_load_pct, 100.0),
+        }
+
         return PhysicsEffect(
-            Q_sensible=Q_sens,
+            Q_sensible=0.0,
+            supply_airflow_W_per_K=supply_airflow_W_per_K,
             dw_dt=-w_removal,
             T_supply_target=T_s_target,
         )
+
+    def get_effort_metrics(self):
+        """Return cached effort metrics from the last compute_physics() call."""
+        return dict(self._last_effort)
 
     def dispatch_specs(self):
         return [

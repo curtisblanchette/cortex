@@ -1,5 +1,6 @@
 phase: early_flower
 light_hours_per_day: 12
+LAI: 4.0
 
 day:
   VPD_target: 1.1
@@ -7,7 +8,8 @@ day:
   CO2_target: 1200.0
   dryback_rate_target: 0.0
   theta_target: 0.36
-  RH_target: 58.0
+  theta_target_frac: 0.87
+  RH_target: 67.0
 
 night:
   VPD_target: 0.9
@@ -15,7 +17,8 @@ night:
   CO2_target: 800.0
   dryback_rate_target: 0.002
   theta_target: 0.32
-  RH_target: 62.0
+  theta_target_frac: 0.73
+  RH_target: 64.0
 
 ramp_minutes: 60
 
@@ -33,7 +36,7 @@ weights:
     CO2: 1.0
     dryback: 2.5
     theta: 2.0
-    RH: 6.0
+    RH: 10.0
   R:
     T_sp: 0.1
     RH_sp: 0.1
@@ -61,6 +64,6 @@ irrigation_schedule:
   last_shot_cutoff_min: 180
   min_interval_min: 60
   theta_trigger_fraction: 0.17
-  shot_duration_s: 90
+  shot_duration_s: 12
   max_daily_shots: 12
   drain_settle_min: 5
