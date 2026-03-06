@@ -60,9 +60,6 @@ EPSILON_LEAF = 0.95  # leaf emissivity
 # CO2 constants
 CO2_AMBIENT = 420.0  # ppm outdoor CO2
 
-# Infiltration
-ACH_INFILTRATION = 0.1  # air changes per hour from leaks
-
 # Reference plant count at which LAI_ref is defined.
 # Actual N_plants from disturbance vector scales LAI proportionally.
 N_REF_PLANTS = 100.0
@@ -103,6 +100,10 @@ class GrowRoomDynamics:
         self.A_wall = room.get('wall_area_m2', 136.0)
         self.rho_air = room.get('rho_air', RHO_AIR)
         self.cp_air = room.get('cp_air', CP_AIR)
+
+        # Air exchange rates (ACH → per-second)
+        self.ach_infiltration_s = room.get('ach_infiltration', 0.1) / 3600.0
+        self.ach_exhaust_s = room.get('ach_exhaust', 0.0) / 3600.0
 
         # Thermal mass of room air
         self.C_air = self.rho_air * self.cp_air * self.V  # J/K
@@ -201,8 +202,11 @@ class GrowRoomDynamics:
         )
         Q_transpiration = transpiration_latent_heat(E_rate, self.A_canopy)
 
-        # ---- Infiltration (core physics) ----
-        ach_s = ACH_INFILTRATION / 3600.0
+        # ---- Air exchange (core physics) ----
+        # Infiltration: passive leaks through door gaps, duct seals.
+        # Exhaust: active carbon filter scrubbing — room air out, outdoor air in.
+        # Both drive T, w, CO2 toward outdoor conditions.
+        ach_s = self.ach_infiltration_s + self.ach_exhaust_s
         Q_infiltration = self.rho_air * self.cp_air * self.V * ach_s * (T_out - T_a)
         w_infiltration = ach_s * (w_out - w_a)
 

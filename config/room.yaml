@@ -15,6 +15,15 @@ room:
     C_wall: 500000.0         # J/K - thermal mass capacitance
     eta_hvac: 0.85           # - HVAC efficiency
 
+  # Air exchange
+  # Passive infiltration from door gaps, duct seals, penetrations.
+  ach_infiltration: 0.1     # air changes per hour
+  # Active exhaust through carbon filters for odor control.
+  # Exhausted room air is replaced by outdoor air (makeup through HVACD
+  # damper or passive intake). Dilutes enriched CO2 toward ambient 420 ppm.
+  # Typical: 0.5-1.0 (small sealed), 1.0-2.0 (commercial with scrubbers).
+  ach_exhaust: 1.0          # air changes per hour
+
   # Air properties
   rho_air: 1.2              # kg/m³
   cp_air: 1005.0            # J/(kg·K)

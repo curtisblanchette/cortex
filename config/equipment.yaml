@@ -14,6 +14,11 @@ hvacd:
   dehumidification_L_hr: 25.0
   dehum_proportional_band: 20.0
   supply_airflow_cfm: 3000.0
+  # Fraction of supply airflow drawn from outdoors (0.0 = sealed, 0.10 = 10%).
+  # Dilutes enriched CO2 toward ambient 420 ppm and adds thermal/moisture load.
+  # Typical: 0.02 (positive pressure + CO2 enrichment), 0.05 (code ventilation),
+  # 0.10-0.15 (odor control / high ventilation).
+  fresh_air_fraction: 0.02
   COP: 3.5
   modbus_address: 1
   modbus_port: /dev/ttyUSB0

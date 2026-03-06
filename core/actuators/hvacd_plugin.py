@@ -1,8 +1,37 @@
 """HVACD actuator plugin — wraps the existing HVACDModel.
 
 Controls: T_sp (temperature setpoint), RH_sp (humidity setpoint).
-Physics: Q_sensible, moisture removal (w_removal), T_supply_target.
+Physics: Q_sensible, moisture removal (w_removal), T_supply_target,
+         and fresh air exchange (CO2 dilution, thermal/moisture load).
+
 Drives the T_supply state via first-order lag.
+
+Fresh air exchange
+------------------
+Commercial HVACDs (Desert Aire, etc.) have a fresh air damper that mixes
+outdoor air into the return airstream before the conditioning coil. The
+``fresh_air_fraction`` parameter (0.0–1.0) sets what proportion of the
+total supply airflow is drawn from outdoors.
+
+Effects modeled:
+  - **CO2 dilution**: outdoor air at ~420 ppm displaces enriched room air.
+    At 10% fresh air on 3000 CFM, this can require 25-30% more CO2
+    injection to maintain 1200 ppm during lights-on.
+  - **Sensible load**: outdoor air temperature adds/removes heat from the
+    room, increasing the coil's cooling or heating demand.
+  - **Moisture load**: outdoor humidity enters the room, increasing
+    dehumidification demand in humid climates.
+
+The fresh air T/w effects are modeled as unconditioned exchange (outdoor
+air displaces room air directly). In reality the coil partially conditions
+the mixed air before delivery, so this slightly overestimates the room-
+side perturbation — a conservative approximation.
+
+Typical values:
+  - 0.00: Sealed grow room with CO2 enrichment (default)
+  - 0.05: Minimum code-compliant ventilation
+  - 0.10: Standard Desert Aire fresh air damper setting
+  - 0.15: High ventilation (odor control, positive pressure)
 """
 
 import numpy as np
@@ -20,6 +49,7 @@ class HVACDPlugin(ActuatorPlugin):
         hvacd_config = equipment_config.get('hvacd', equipment_config)
         self.hvacd = HVACDModel(hvacd_config)
         self.COP = hvacd_config.get('COP', 3.5)
+        self.fresh_air_fraction = hvacd_config.get('fresh_air_fraction', 0.0)
         self._last_effort = {}
 
     def name(self) -> str:
@@ -90,10 +120,29 @@ class HVACDPlugin(ActuatorPlugin):
             'cooling_load_pct': min(cooling_load_pct, 100.0),
         }
 
+        # Fresh air intake — fraction of supply airflow drawn from outdoors.
+        # Models the fresh air damper on commercial HVACDs. Outdoor air at
+        # ~420 ppm displaces enriched room air (CO2 dilution), and carries
+        # outdoor temperature and humidity into the room (additional load).
+        # At 10% on 3000 CFM: ~0.14 m³/s outdoor air, replacing room air
+        # at the same rate — equivalent to ~1.8 ACH of fresh air exchange.
+        dC_fresh = 0.0
+        dw_fresh = 0.0
+        Q_fresh = 0.0
+        if self.fresh_air_fraction > 0:
+            fresh_airflow = airflow * self.fresh_air_fraction  # m³/s outdoor air
+            T_out = d[1]
+            w_out = d[2]
+            CO2_ambient = 420.0
+            dC_fresh = (fresh_airflow / V) * (CO2_ambient - C)
+            dw_fresh = (fresh_airflow / V) * (w_out - w_a)
+            Q_fresh = rho_air * 1005.0 * fresh_airflow * (T_out - T_a)
+
         return PhysicsEffect(
-            Q_sensible=0.0,
+            Q_sensible=Q_fresh,
             supply_airflow_W_per_K=supply_airflow_W_per_K,
-            dw_dt=-w_removal,
+            dw_dt=-w_removal + dw_fresh,
+            dC_dt=dC_fresh,
             T_supply_target=T_s_target,
         )
 
