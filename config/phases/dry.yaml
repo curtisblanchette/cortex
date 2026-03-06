@@ -29,8 +29,8 @@ compliance:
 
 weights:
   Q:
-    VPD: 8.0
-    T: 60.0              # tight temperature control
+    VPD: 20.0
+    T: 40.0              # tight temperature control
     CO2: 0.0             # no CO2 enrichment
     dryback: 0.0         # no substrate
     theta: 0.0           # no substrate
@@ -46,8 +46,8 @@ weights:
     u_fan: 0.003
     u_irr: 1.0           # heavily penalize irrigation (shouldn't run)
   S:
-    T_sp: 1.0
-    RH_sp: 1.0
+    T_sp: 0.5
+    RH_sp: 0.5
     u_cool: 0.2
     u_heat: 0.3
     u_dehum: 0.2

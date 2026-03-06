@@ -31,12 +31,12 @@ compliance:
 
 weights:
   Q:
-    VPD: 8.0
-    T: 30.0
+    VPD: 15.0
+    T: 25.0
     CO2: 0.5
     dryback: 1.0
     theta: 3.0
-    RH: 15.0
+    RH: 8.0
   R:
     T_sp: 0.1
     RH_sp: 0.1
@@ -48,8 +48,8 @@ weights:
     u_fan: 0.005
     u_irr: 0.02
   S:
-    T_sp: 1.0
-    RH_sp: 1.0
+    T_sp: 0.5
+    RH_sp: 0.5
     u_cool: 0.2
     u_heat: 0.5
     u_dehum: 0.3
@@ -63,7 +63,7 @@ irrigation_schedule:
   first_shot_delay_min: 60
   last_shot_cutoff_min: 120
   min_interval_min: 120
-  theta_trigger_fraction: 0.05
+  theta_trigger_fraction: 0.03
   shot_duration_s: 5
   max_daily_shots: 8
   drain_settle_min: 5

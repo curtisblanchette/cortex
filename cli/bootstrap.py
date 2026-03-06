@@ -70,14 +70,16 @@ def build_dynamics(configs, shared_params, registry, substrate=None):
                             substrate=substrate, LAI_ref=LAI_ref)
 
 
-def build_ekf(dynamics, substrate=None):
+def build_ekf(dynamics, substrate=None, theta_init=None):
     """Build and initialize the EKF."""
     from estimation.ekf import StateEstimator
     from core.dynamics import GrowRoomDynamics
     ekf = StateEstimator(dynamics)
     x0 = GrowRoomDynamics.default_initial_state()
-    if substrate is not None:
-        x0[4] = substrate.theta_fc * 0.92  # "just watered, settling"
+    if theta_init is not None:
+        x0[4] = theta_init
+    elif substrate is not None:
+        x0[4] = substrate.theta_fc * 0.92
     ekf.initialize(x0)
     return ekf
 
@@ -131,14 +133,16 @@ def build_advisory_engine(configs, reference, dynamics, room_id='room1'):
                           room_id=room_id)
 
 
-def build_simulation_io(configs, registry, substrate=None):
+def build_simulation_io(configs, registry, substrate=None, theta_init=None):
     """Build SimulatedRoom + SimulatedIO. Returns (io, sim_room)."""
     from simulation.room import SimulatedRoom
     from control.io import SimulatedIO
     from core.dynamics import GrowRoomDynamics
     LAI_ref = configs['phase'].get('LAI', 3.0)
     initial_state = GrowRoomDynamics.default_initial_state()
-    if substrate is not None:
+    if theta_init is not None:
+        initial_state[4] = theta_init
+    elif substrate is not None:
         initial_state[4] = substrate.theta_fc * 0.92
     sim_room = SimulatedRoom(configs['room'], configs['equipment'],
                               registry, noise_seed=42, substrate=substrate,
@@ -202,6 +206,14 @@ def build_irrigation_scheduler(configs, registry, substrate, light_schedule):
 
     from control.irrigation_scheduler import IrrigationConfig, IrrigationScheduler
 
+    # Resolve the day theta target so the trigger is target-relative
+    day = phase_cfg.get('day', {})
+    if 'theta_target_frac' in day:
+        awc = substrate.theta_fc - substrate.theta_wp
+        day_theta = substrate.theta_wp + float(day['theta_target_frac']) * awc
+    else:
+        day_theta = day.get('theta_target', 0.35)
+
     config = IrrigationConfig(
         enabled=irr_cfg['enabled'],
         first_shot_delay_s=irr_cfg.get('first_shot_delay_min', 30) * 60.0,
@@ -229,4 +241,5 @@ def build_irrigation_scheduler(configs, registry, substrate, light_schedule):
         light_schedule=light_schedule,
         flow_rate_ml_s=flow_rate_ml_s,
         canopy_area_m2=canopy_area_m2,
+        theta_target=day_theta,
     )

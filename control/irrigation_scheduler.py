@@ -32,7 +32,7 @@ class IrrigationConfig:
     first_shot_delay_s: float
     last_shot_cutoff_s: float
     min_interval_s: float
-    theta_trigger_fraction: float   # fire when theta < theta_fc * (1 - fraction)
+    theta_trigger_fraction: float   # fire when theta < target - fraction * AWC
     shot_duration_s: float
     max_daily_shots: int
     drain_settle_s: float
@@ -46,15 +46,18 @@ class IrrigationScheduler:
     """
 
     def __init__(self, config, substrate, registry, light_schedule,
-                 flow_rate_ml_s, canopy_area_m2):
+                 flow_rate_ml_s, canopy_area_m2, theta_target=None):
         """
         Args:
             config: IrrigationConfig with phase-specific timing.
-            substrate: SubstrateProfile (for theta_fc).
+            substrate: SubstrateProfile (for theta_fc, theta_wp).
             registry: ActuatorRegistry (for u_irr channel index).
             light_schedule: LightSchedule instance.
             flow_rate_ml_s: Manifold flow rate (used for logging only).
             canopy_area_m2: Canopy area (used for logging only).
+            theta_target: Resolved day theta target. Trigger is computed
+                          relative to this so irrigation oscillates around
+                          the target, not around theta_fc.
         """
         self.config = config
         self.substrate = substrate
@@ -68,8 +71,13 @@ class IrrigationScheduler:
             raise ValueError("IrrigationScheduler requires u_irr in registry")
         self._irr_idx = names.index('u_irr')
 
-        # Theta trigger threshold
-        self.theta_trigger = substrate.theta_fc * (1.0 - config.theta_trigger_fraction)
+        # Theta trigger: dryback below target by fraction * AWC
+        awc = substrate.theta_fc - substrate.theta_wp
+        if theta_target is not None:
+            self.theta_trigger = theta_target - config.theta_trigger_fraction * awc
+        else:
+            self.theta_trigger = substrate.theta_fc * (1.0 - config.theta_trigger_fraction)
+        self.theta_trigger = max(self.theta_trigger, substrate.theta_wp)
 
         # State machine
         self._state = IrrState.IDLE

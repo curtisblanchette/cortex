@@ -132,8 +132,18 @@ class SimulationManager:
             registry = build_registry(configs, profile_override=profile, substrate=substrate)
             shared_params = build_shared_params(substrate=substrate)
             dynamics = build_dynamics(configs, shared_params, registry, substrate=substrate)
-            io, sim_room = build_simulation_io(configs, registry, substrate=substrate)
-            ekf = build_ekf(dynamics)
+
+            # Resolve day theta target for initial state
+            day_cfg = configs['phase'].get('day', {})
+            if substrate is not None and 'theta_target_frac' in day_cfg:
+                awc = substrate.theta_fc - substrate.theta_wp
+                theta_init = substrate.theta_wp + float(day_cfg['theta_target_frac']) * awc
+            else:
+                theta_init = day_cfg.get('theta_target', 0.35)
+
+            io, sim_room = build_simulation_io(configs, registry, substrate=substrate,
+                                                theta_init=theta_init)
+            ekf = build_ekf(dynamics, substrate=substrate, theta_init=theta_init)
             mpc = build_mpc(dynamics, shared_params, registry, configs)
             reference = build_reference(configs, registry=registry, substrate=substrate)
             light_schedule = build_light_schedule(configs)

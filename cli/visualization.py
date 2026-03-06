@@ -43,6 +43,7 @@ class TelemetryRecorder:
         self.vpd_target = []
         self.t_target = []
         self.co2_target = []
+        self.rh_target = []
         self.theta_target = []
         self.solve_ms = []
         self.innovation_rms = []
@@ -66,6 +67,7 @@ class TelemetryRecorder:
         self.vpd_target.append(ref_targets.get('VPD', 1.2))
         self.t_target.append(ref_targets.get('T', 26.0))
         self.co2_target.append(ref_targets.get('CO2', 1200.0))
+        self.rh_target.append(ref_targets.get('RH', 55.0))
         self.theta_target.append(ref_targets.get('theta', 0.35))
         self.solve_ms.append(info.get('solve_ms', 0))
         self.innovation_rms.append(info.get('innovation_rms', 0))
@@ -141,6 +143,7 @@ class TelemetryRecorder:
             'vpd_target': np.array(self.vpd_target),
             't_target': np.array(self.t_target),
             'co2_target': np.array(self.co2_target),
+            'rh_target': np.array(self.rh_target),
             'theta_target': np.array(self.theta_target),
             'solve_ms': np.array(self.solve_ms),
             'innovation_rms': np.array(self.innovation_rms),
@@ -266,6 +269,12 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     shade_lights(ax3, t, d)
     ax3_rh = ax3
     ax3_wa = ax3.twinx()
+    rh_tgt = data.get('rh_target')
+    if rh_tgt is not None:
+        tol_rh = compliance_report.get('RH', {}).get('tolerance', 5.0) if compliance_report else 5.0
+        ax3_rh.plot(t, rh_tgt, color=C_TARGET, linewidth=1.5, linestyle='--', label='RH target', zorder=4)
+        ax3_rh.fill_between(t, rh_tgt - tol_rh, rh_tgt + tol_rh,
+                             color=C_TOLERANCE, alpha=0.3, zorder=1)
     ln1 = ax3_rh.plot(t, data['rh'], color=C_ACTUAL, linewidth=1.2, label='RH (%)', zorder=3)
     ln2 = ax3_wa.plot(t, x[:, 1], color=C_CONTROL, linewidth=0.8, label='w_a (g/kg)', zorder=3)
     lns = ln1 + ln2
@@ -273,6 +282,11 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     ax3.legend(lns, labs, loc='upper right', fontsize=8)
     ax3.set_title('Humidity', fontsize=13, fontweight='bold', pad=6)
     style_axis(ax3, 'Relative Humidity (%)')
+    # Fix y-axis to prevent jitter from derived RH target
+    rh_all = data['rh']
+    rh_lo = max(20, np.floor(rh_all.min() / 5) * 5 - 5)
+    rh_hi = min(100, np.ceil(rh_all.max() / 5) * 5 + 5)
+    ax3_rh.set_ylim(rh_lo, rh_hi)
     ax3_wa.set_ylabel('Absolute Humidity (g/kg)', fontsize=10, color=C_CONTROL)
     ax3_wa.tick_params(labelsize=9, colors=C_CONTROL)
 

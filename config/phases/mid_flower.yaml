@@ -4,7 +4,7 @@ LAI: 4.5
 
 day:
   VPD_target: 1.2
-  T_target: 26.0
+  T_target: 27.0
   CO2_target: 1200.0
   dryback_rate_target: 0.0
   theta_target: 0.35
@@ -31,12 +31,12 @@ compliance:
 
 weights:
   Q:  # State tracking weights
-    VPD: 15.0
-    T: 50.0
+    VPD: 80.0
+    T: 15.0
     CO2: 1.0
     dryback: 3.0
     theta: 2.0
-    RH: 12.0
+    RH: 3.0
   R:  # Control effort - low for percentage controls
     T_sp: 0.1
     RH_sp: 0.1
@@ -48,8 +48,8 @@ weights:
     u_fan: 0.003
     u_irr: 0.01
   S:  # Rate-of-change - moderate to dampen oscillation
-    T_sp: 1.0
-    RH_sp: 1.0
+    T_sp: 0.5
+    RH_sp: 0.5
     u_cool: 0.1           # allow faster cooling response
     u_heat: 0.5
     u_dehum: 0.2
@@ -63,7 +63,7 @@ irrigation_schedule:
   first_shot_delay_min: 30
   last_shot_cutoff_min: 180
   min_interval_min: 45
-  theta_trigger_fraction: 0.22
+  theta_trigger_fraction: 0.08
   shot_duration_s: 15
   max_daily_shots: 12
   drain_settle_min: 5

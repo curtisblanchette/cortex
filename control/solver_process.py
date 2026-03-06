@@ -109,6 +109,13 @@ class SolverProcess:
         self._cached_fs_level = 'P1_NORMAL'
         self._cached_ref_targets = None
 
+        # Smoothed leaf-air offset for derived RH target (avoids tick-to-tick jitter)
+        self._ema_delta_T_leaf = None
+
+        # Integral action — biases references to compensate for linearization error
+        self._vpd_integral = 0.0
+        self._t_integral = 0.0
+
         # Telemetry callback (optional)
         self._telemetry_callback = None
 
@@ -143,6 +150,9 @@ class SolverProcess:
         if self._last_lights_on is not None and current_lights != self._last_lights_on:
             self.mpc.force_cold_start()
             self.failsafe.reset()
+            self._ema_delta_T_leaf = None  # re-seed on light transition
+            self._vpd_integral = 0.0       # prevent stale bias carrying over
+            self._t_integral = 0.0
             force_solve = True
             logger.info(f"[SolverProcess] Light transition at t={current_time:.0f}s — "
                         f"forcing OSQP cold start + failsafe reset")
@@ -172,8 +182,13 @@ class SolverProcess:
                 horizon_steps=self.mpc.Np, step_s=self.mpc.step_s,
             )
 
-            # Derive VPD-consistent RH targets from current leaf-air offset
-            delta_T_leaf = x_hat[3] - x_hat[0]  # T_leaf - T_air
+            # Derive VPD-consistent RH targets from smoothed leaf-air offset
+            raw_delta = x_hat[3] - x_hat[0]  # T_leaf - T_air
+            if self._ema_delta_T_leaf is None:
+                self._ema_delta_T_leaf = raw_delta
+            else:
+                self._ema_delta_T_leaf += 0.02 * (raw_delta - self._ema_delta_T_leaf)
+            delta_T_leaf = self._ema_delta_T_leaf
             for k in range(ref_trajectory.shape[0]):
                 T_leaf_k = ref_trajectory[k, 1] + delta_T_leaf
                 svp_leaf = saturation_vapor_pressure(T_leaf_k)
@@ -193,6 +208,29 @@ class SolverProcess:
                 'theta': ref_trajectory[0, 4],
                 'RH': ref_trajectory[0, 5],
             }
+
+            # Integral action — biases references to compensate for
+            # linearization mismatch and model error.
+            # Sign convention: error = (target - actual). Positive error means
+            # actual is below target → integral accumulates positive → raises
+            # reference → MPC pushes harder upward.  Negative error (actual
+            # above target) → integral goes negative → lowers reference.
+            dt_solve = float(self._mpc_interval)
+            derived_now = self.dynamics.derived_outputs(x_hat)
+
+            vpd_error = ref_trajectory[0, 0] - derived_now['VPD']
+            self._vpd_integral = np.clip(
+                self._vpd_integral + 0.003 * vpd_error * dt_solve,
+                -0.3, 0.3,
+            )
+            ref_trajectory[:, 0] += self._vpd_integral
+
+            t_error = ref_trajectory[0, 1] - x_hat[0]
+            self._t_integral = np.clip(
+                self._t_integral + 0.003 * t_error * dt_solve,
+                -4.0, 4.0,
+            )
+            ref_trajectory[:, 1] += self._t_integral
 
             u_opt, trajectory, solve_info = self.mpc.solve(
                 x_hat, d_forecast, ref_trajectory, u_prev=self.last_u,
