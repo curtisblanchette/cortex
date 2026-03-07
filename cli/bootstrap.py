@@ -172,7 +172,8 @@ def build_co2_scheduler(configs, registry, light_schedule, reference):
     co2_equip = actuators.get('co2', {})
 
     config = CO2Config(
-        deadband_ppm=co2_equip.get('deadband_ppm', 50.0),
+        deadband_ppm=co2_equip.get('deadband_ppm', 75.0),
+        overshoot_ppm=co2_equip.get('overshoot_ppm', 75.0),
         min_off_s=co2_equip.get('min_off_s', 30.0),
         expected_flow_ppm_s=co2_equip.get('flow_rate_ppm_s', 10.0),
     )

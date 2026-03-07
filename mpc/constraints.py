@@ -76,6 +76,13 @@ class ConstraintBuilder:
             if ch_a in names and ch_b in names:
                 self.exclusive_pairs.append((names.index(ch_a), names.index(ch_b), max_sum))
 
+        # Implicit exclusion: HVACD dehumidification (via RH_sp) vs humidifier.
+        # When the HVACD would dehumidify (room RH > solved RH_sp), running
+        # the humidifier is wasteful — they fight each other.
+        self._hvacd_hum_pair = None
+        if 'RH_sp' in names and 'u_hum' in names:
+            self._hvacd_hum_pair = (names.index('RH_sp'), names.index('u_hum'))
+
     def get_state_bounds(self, Np):
         """Get state bounds stacked over prediction horizon."""
         x_lb = np.tile(self.x_min, Np)
@@ -141,6 +148,40 @@ class ConstraintBuilder:
                 else:
                     u[idx_a] = 0.0
         return u
+
+    def apply_mode_constraints(self, x_hat, u_prev):
+        """Pre-solve bound tightening based on current operating mode.
+
+        When the HVACD is dehumidifying (room RH > previous RH_sp),
+        lock the humidifier to 0 so the QP doesn't fight itself.
+        The MPC optimizes knowing the humidifier is unavailable.
+
+        Call before solve; call release_mode_constraints() after.
+        """
+        self._mode_overrides = {}
+
+        if self._hvacd_hum_pair is None:
+            return
+
+        rh_sp_idx, hum_idx = self._hvacd_hum_pair
+        from core.thermodynamics import saturation_vapor_pressure, P_ATM
+        T_a, w_a = x_hat[0], x_hat[1]
+        SVP = saturation_vapor_pressure(T_a)
+        e_air = w_a * P_ATM / (622.0 + w_a)
+        current_RH = e_air / SVP * 100.0 if SVP > 0 else 50.0
+
+        if current_RH > u_prev[rh_sp_idx]:
+            # HVACD is dehumidifying — lock humidifier off for this solve
+            self._mode_overrides[hum_idx] = (self.u_min[hum_idx], self.u_max[hum_idx])
+            self.u_min[hum_idx] = 0.0
+            self.u_max[hum_idx] = 0.0
+
+    def release_mode_constraints(self):
+        """Restore bounds after solve."""
+        for idx, (lo, hi) in self._mode_overrides.items():
+            self.u_min[idx] = lo
+            self.u_max[idx] = hi
+        self._mode_overrides = {}
 
     def lock_channel(self, channel_name, value=0.0):
         """Lock a control channel to a fixed value.

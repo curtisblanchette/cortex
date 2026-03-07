@@ -36,6 +36,7 @@ room:
   par_efficiency: 0.4        # fraction of light power that is PAR (rest is heat)
 
   # Outdoor conditions (defaults)
+  # TODO supply these values from weather apis using users locale.
   outdoor:
     T_out_mean_C: 28.0
     T_out_amplitude_C: 5.0

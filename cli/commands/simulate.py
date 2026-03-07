@@ -136,6 +136,7 @@ def _run_decoupled(args):
         mpc.constraints.lock_channel('u_co2', 0.0)
         print(f"[Cortex] CO2 scheduler active — "
               f"deadband={co2_scheduler.config.deadband_ppm:.0f}ppm, "
+              f"overshoot={co2_scheduler.config.overshoot_ppm:.0f}ppm, "
               f"holdoff={co2_scheduler.config.min_off_s:.0f}s")
     else:
         print("[Cortex] CO2 scheduler disabled (no u_co2 channel)")

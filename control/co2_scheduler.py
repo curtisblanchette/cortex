@@ -5,9 +5,9 @@ that opens/closes a solenoid based on CO2 level vs. target. The MPC retains
 the u_co2 column (locked to 0) for trajectory prediction accuracy.
 
 State machine:
-    IDLE ──[lights on]──> READY ──[CO2 < target - deadband]──> INJECTING ──[CO2 ≥ target]──> HOLDOFF
-      ^                     |                                                                    |
-      |                     |<───────────────────────[holdoff elapsed]────────────────────────────┘
+    IDLE ──[lights on]──> READY ──[CO2 < target - deadband]──> INJECTING ──[CO2 ≥ target + overshoot]──> HOLDOFF
+      ^                     |                                                                              |
+      |                     |<─────────────────────────[holdoff elapsed]────────────────────────────────────┘
       |<───[lights off]─────┘
 """
 
@@ -29,8 +29,14 @@ class CO2State(Enum):
 
 @dataclass
 class CO2Config:
-    """CO2 scheduler parameters."""
-    deadband_ppm: float = 50.0
+    """CO2 scheduler parameters.
+
+    Hysteresis band: inject when CO2 < target - deadband_ppm,
+    stop when CO2 >= target + overshoot_ppm.  Using both sides of
+    the target reduces relay cycling (longer inject, longer off).
+    """
+    deadband_ppm: float = 75.0
+    overshoot_ppm: float = 75.0
     min_off_s: float = 30.0
     expected_flow_ppm_s: float = 10.0
 
@@ -129,7 +135,7 @@ class CO2Scheduler:
         u_vector[self._co2_idx] = 100.0
         self._injection_readings.append((current_time_s, co2))
 
-        if co2 >= target:
+        if co2 >= target + self.config.overshoot_ppm:
             self._end_injection(current_time_s)
             self._state = CO2State.HOLDOFF
             self._holdoff_start_time = current_time_s

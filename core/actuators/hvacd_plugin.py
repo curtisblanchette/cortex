@@ -121,13 +121,27 @@ class HVACDPlugin(ActuatorPlugin):
             w_removal = 0.0
 
         # Cache effort metrics for telemetry
-        # Estimate cooling load from supply-air delta-T vs max capacity
+        # Estimate load from supply-air delta-T vs max capacity
         delta_T = T_a - T_s_target
         Q_estimate = supply_airflow_W_per_K * delta_T
-        cooling_load_pct = abs(Q_estimate) / self.hvacd.Q_cool_max * 100.0 if delta_T > 0 else 0.0
+        if delta_T > 0:
+            cooling_load_pct = min(Q_estimate / self.hvacd.Q_cool_max * 100.0, 100.0)
+            heating_load_pct = 0.0
+        else:
+            cooling_load_pct = 0.0
+            heating_load_pct = min(abs(Q_estimate) / self.hvacd.Q_heat_max * 100.0, 100.0)
+
+        # When dehumidifying + heating simultaneously, the "heating" is
+        # actually hot-gas reheat — a normal part of HVACD dehumidification
+        # mode (cool coil condenses moisture, then reheat prevents overcooling).
+        # Report this as dehumidification, not standalone heating.
+        if dehum_fraction > 0 and heating_load_pct > 0:
+            heating_load_pct = 0.0
+
         self._last_effort = {
             'dehum_fraction': dehum_fraction,
-            'cooling_load_pct': min(cooling_load_pct, 100.0),
+            'cooling_load_pct': cooling_load_pct,
+            'heating_load_pct': heating_load_pct,
         }
 
         # Fresh air intake — fraction of supply airflow drawn from outdoors.

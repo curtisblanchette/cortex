@@ -154,12 +154,35 @@ class MPCSolver:
         x_lin = self._pre_equilibrate(x_hat, u0, d0, params)
         A_d, B_d, Bd_d, c_d = self.dynamics.linearize(x_lin, u0, d0, params, dt=self.step_s)
 
+        # Piecewise linearization: detect light transition in forecast and
+        # compute a second set of dynamics matrices for the post-transition
+        # region.  At dark operating points, stomatal conductance ≈ 0 makes
+        # Bd[w_a, Q_light] ~14x too small — the MPC underestimates the
+        # humidity spike at lights-on.  Using light-OP matrices after the
+        # transition step fixes this.
+        dynamics_post = None
+        Q_LIGHT_THRESHOLD = 1000.0  # W — significant change in lighting load
+        Q_light_0 = d0[0]
+        for k in range(1, len(d_forecast)):
+            if abs(d_forecast[k, 0] - Q_light_0) > Q_LIGHT_THRESHOLD:
+                d_post = d_forecast[k].copy()
+                x_lin2 = self._pre_equilibrate(x_hat, u0, d_post, params)
+                A_d2, B_d2, Bd_d2, c_d2 = self.dynamics.linearize(
+                    x_lin2, u0, d_post, params, dt=self.step_s)
+                dynamics_post = (A_d2, B_d2, Bd_d2, c_d2, k)
+                break
+
         # Affine output model: y = C_out @ x + d_offset
         C_out, d_offset = self._build_output_matrix(x_hat, params)
 
         # Shift reference so QP tracks (C @ x) toward (r - d_offset),
         # which makes the true output y = C@x + d track the original r.
         reference_adj = reference - d_offset[np.newaxis, :]
+
+        # Pre-solve: tighten bounds based on operating mode (e.g., lock
+        # humidifier when HVACD is dehumidifying) so the QP decides optimally
+        # within the feasible set rather than requiring post-solve overrides.
+        self.constraints.apply_mode_constraints(x_hat, u_prev)
 
         # Build and solve QP
         try:
@@ -168,6 +191,7 @@ class MPCSolver:
                 d_forecast, reference_adj, u_prev,
                 Q_diag, R_diag, S_diag,
                 c_d=c_d,
+                dynamics_post=dynamics_post,
             )
 
             t_total = (time_mod.perf_counter() - t_start) * 1000.0
@@ -190,9 +214,11 @@ class MPCSolver:
             # Build trajectory
             trajectory = x_pred_seq.reshape(self.Np, self.n_x)
 
+            self.constraints.release_mode_constraints()
             return u_opt, trajectory, self.last_solve_info
 
         except Exception as e:
+            self.constraints.release_mode_constraints()
             t_total = (time_mod.perf_counter() - t_start) * 1000.0
             self.last_solve_info = {
                 'status': f'error: {str(e)}',
@@ -206,7 +232,8 @@ class MPCSolver:
             return u_fallback, trajectory, self.last_solve_info
 
     def _build_qp_matrices(self, x0, A_d, B_d, Bd_d, C_out, d_forecast,
-                           reference, u_prev, Q_diag, R_diag, S_diag, c_d=None):
+                           reference, u_prev, Q_diag, R_diag, S_diag,
+                           c_d=None, dynamics_post=None):
         """Assemble QP cost and constraint matrices (dense).
 
         Returns:
@@ -266,11 +293,24 @@ class MPCSolver:
         if c_d is None:
             c_d = np.zeros(n_x)
 
+        # Unpack piecewise dynamics for light transitions
+        if dynamics_post is not None:
+            A_d2, B_d2, Bd_d2, c_d2, transition_step = dynamics_post
+        else:
+            transition_step = None
+
         n_eq = Np * n_x
         A_eq = np.zeros((n_eq, n_dec))
         b_eq = np.zeros(n_eq)
 
         for k in range(Np):
+            # Select dynamics matrices: use post-transition set after the
+            # light transition step (piecewise linearization)
+            if transition_step is not None and k >= transition_step:
+                A_k, B_k, Bd_k, c_k = A_d2, B_d2, Bd_d2, c_d2
+            else:
+                A_k, B_k, Bd_k, c_k = A_d, B_d, Bd_d, c_d
+
             row_start = k * n_x
             row_end = row_start + n_x
             x_k1_start = x_offset + k * n_x  # x[k+1] position
@@ -281,19 +321,19 @@ class MPCSolver:
             # A_d on x[k]
             if k == 0:
                 # x[0] = x0 (known), so A_d @ x0 goes to RHS
-                b_eq[row_start:row_end] = -A_d @ x0
+                b_eq[row_start:row_end] = -A_k @ x0
             else:
                 x_k_start = x_offset + (k - 1) * n_x
-                A_eq[row_start:row_end, x_k_start:x_k_start + n_x] = A_d
+                A_eq[row_start:row_end, x_k_start:x_k_start + n_x] = A_k
 
             # B_d on u[k] (use u[Nc-1] for k >= Nc — hold last control)
             u_k = min(k, Nc - 1)
             u_k_start = u_k * n_u
-            A_eq[row_start:row_end, u_k_start:u_k_start + n_u] = B_d
+            A_eq[row_start:row_end, u_k_start:u_k_start + n_u] = B_k
 
             # Disturbance + affine offset on RHS
             d_k = d_forecast[k] if k < len(d_forecast) else d_forecast[-1]
-            b_eq[row_start:row_end] -= Bd_d @ d_k + c_d
+            b_eq[row_start:row_end] -= Bd_k @ d_k + c_k
 
         # ===== Inequality constraints: bounds =====
         x_lb, x_ub = self.constraints.get_state_bounds(Np)
@@ -343,7 +383,8 @@ class MPCSolver:
         return P, q, A_dense, l_all, u_all
 
     def _solve_qp(self, x0, A_d, B_d, Bd_d, C_out, d_forecast, reference,
-                  u_prev, Q_diag, R_diag, S_diag, c_d=None):
+                  u_prev, Q_diag, R_diag, S_diag, c_d=None,
+                  dynamics_post=None):
         """Formulate and solve the QP.
 
         Decision variables z = [u[0], ..., u[Nc-1], x[1], ..., x[Np]]
@@ -361,6 +402,7 @@ class MPCSolver:
         P_dense, q, A_dense, l_all, u_all = self._build_qp_matrices(
             x0, A_d, B_d, Bd_d, C_out, d_forecast, reference,
             u_prev, Q_diag, R_diag, S_diag, c_d=c_d,
+            dynamics_post=dynamics_post,
         )
 
         # Symmetrize + regularize P, take upper triangle
@@ -414,6 +456,7 @@ class MPCSolver:
                 return self._solve_qp(
                     x0, A_d, B_d, Bd_d, C_out, d_forecast, reference,
                     u_prev, Q_diag, R_diag, S_diag, c_d=c_d,
+                    dynamics_post=dynamics_post,
                 )
 
         # Warm-start from previous solution (primal + dual)
