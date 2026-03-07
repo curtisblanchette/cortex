@@ -25,6 +25,7 @@ class SimulateRequest(BaseModel):
     profile: str | None = None
     substrate: str | None = None
     duration: int = Field(default=43200, ge=60, le=172800)
+    weather: str | None = None
 
 
 def create_api(control_loop=None, compliance=None, shared_params=None,
@@ -271,6 +272,7 @@ def create_api(control_loop=None, compliance=None, shared_params=None,
             for i, ch in enumerate(reg._channels):
                 field = idx_to_field.get(i, ch.name)
                 kind = 'setpoint' if ch.name.endswith('_sp') else 'percentage'
+                plugin = reg._channel_to_plugin.get(ch.name)
                 manifest.append({
                     'name': ch.name,
                     'field': field,
@@ -279,6 +281,7 @@ def create_api(control_loop=None, compliance=None, shared_params=None,
                     'bound_high': ch.bound_high,
                     'default': ch.default,
                     'kind': kind,
+                    'plugin': plugin.name() if plugin else None,
                 })
             result['equipment_manifest'] = manifest
 
@@ -331,6 +334,7 @@ def create_api(control_loop=None, compliance=None, shared_params=None,
             'substrate': req.substrate,
             'duration': req.duration,
             'config_dir': 'config',
+            'weather': req.weather,
         }
         mgr.start(params, app)
         return {"status": "started"}
@@ -379,6 +383,8 @@ def create_api(control_loop=None, compliance=None, shared_params=None,
                 for f in os.listdir(phase_dir) if f.endswith('.yaml')
             )
 
+        from cli.commands.simulate import WEATHER_PRESETS
+
         return {
             "phases": phases,
             "profiles": sorted(PROFILES.keys()),
@@ -388,6 +394,7 @@ def create_api(control_loop=None, compliance=None, shared_params=None,
                 {"label": "12h", "seconds": 43200},
                 {"label": "24h", "seconds": 86400},
             ],
+            "weather_presets": sorted(WEATHER_PRESETS.keys()),
         }
 
     @app.websocket("/ws/dashboard")

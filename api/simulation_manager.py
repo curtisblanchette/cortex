@@ -128,6 +128,23 @@ class SimulationManager:
         try:
             # ---- Build all components ----
             configs = load_configs(config_dir, phase_override=phase)
+
+            # Apply weather preset
+            weather_preset = params.get('weather')
+            if weather_preset:
+                from cli.commands.simulate import WEATHER_PRESETS
+                if weather_preset in WEATHER_PRESETS:
+                    room_cfg = configs['room'].get('room', configs['room'])
+                    outdoor = room_cfg.setdefault('outdoor', {})
+                    outdoor.update(WEATHER_PRESETS[weather_preset])
+                    logger.info(
+                        "Weather: %s (T_out=%.1f±%.1f°C, w_out=%.1f g/kg)",
+                        weather_preset,
+                        outdoor['T_out_mean_C'],
+                        outdoor['T_out_amplitude_C'],
+                        outdoor['w_out_gkg'],
+                    )
+
             substrate = build_substrate(configs, substrate_override=substrate_name)
             registry = build_registry(configs, profile_override=profile, substrate=substrate)
             shared_params = build_shared_params(substrate=substrate)

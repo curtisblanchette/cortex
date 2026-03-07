@@ -10,6 +10,12 @@ from cli.bootstrap import (
     build_advisory_engine,
 )
 
+WEATHER_PRESETS = {
+    'bc-summer': {'T_out_mean_C': 25.0, 'T_out_amplitude_C': 8.0, 'w_out_gkg': 8.0},
+    'bc-spring': {'T_out_mean_C': 12.0, 'T_out_amplitude_C': 6.0, 'w_out_gkg': 5.5},
+    'bc-winter': {'T_out_mean_C': -2.0, 'T_out_amplitude_C': 4.0, 'w_out_gkg': 2.5},
+}
+
 
 def register(subparsers):
     p = subparsers.add_parser('simulate', help='Run in-process simulation')
@@ -29,6 +35,14 @@ def register(subparsers):
                    help='Generate visualization chart on completion')
     p.add_argument('--chart-output', type=str, default='output/simulation.png',
                    help='Output path for chart (default: output/simulation.png)')
+    p.add_argument('--weather', type=str, choices=list(WEATHER_PRESETS.keys()),
+                   help='Outdoor weather preset (bc-summer, bc-spring, bc-winter)')
+    p.add_argument('--T-out-mean', type=float, default=None,
+                   help='Override outdoor mean temp (°C)')
+    p.add_argument('--T-out-amp', type=float, default=None,
+                   help='Override outdoor temp amplitude (°C)')
+    p.add_argument('--w-out', type=float, default=None,
+                   help='Override outdoor humidity (g/kg)')
     p.add_argument('--dashboard', action='store_true',
                    help='Start API server for live VPD dashboard')
     p.add_argument('--api-port', type=int, default=8080,
@@ -89,6 +103,31 @@ def _run_decoupled(args):
     substrate_name = getattr(args, 'substrate', None)
 
     configs = load_configs(args.config, phase_override=phase)
+
+    # Apply weather overrides: preset < individual overrides < room.yaml defaults
+    weather_preset = getattr(args, 'weather', None)
+    T_out_mean = getattr(args, 'T_out_mean', None)
+    T_out_amp = getattr(args, 'T_out_amp', None)
+    w_out = getattr(args, 'w_out', None)
+
+    if weather_preset or T_out_mean is not None or T_out_amp is not None or w_out is not None:
+        room_cfg = configs['room'].get('room', configs['room'])
+        outdoor = room_cfg.setdefault('outdoor', {})
+        if weather_preset:
+            outdoor.update(WEATHER_PRESETS[weather_preset])
+        if T_out_mean is not None:
+            outdoor['T_out_mean_C'] = T_out_mean
+        if T_out_amp is not None:
+            outdoor['T_out_amplitude_C'] = T_out_amp
+        if w_out is not None:
+            outdoor['w_out_gkg'] = w_out
+
+        label = weather_preset or 'custom'
+        print(f"[Cortex] Weather: {label} "
+              f"(T_out={outdoor['T_out_mean_C']:.1f}"
+              f"±{outdoor['T_out_amplitude_C']:.1f}°C, "
+              f"w_out={outdoor['w_out_gkg']:.1f} g/kg)")
+
     substrate = build_substrate(configs, substrate_override=substrate_name)
 
     resolved_phase = configs['phase'].get('phase', phase or 'mid_flower')
