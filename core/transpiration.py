@@ -33,16 +33,19 @@ THETA_FC = 0.40      # m³/m³ - field capacity (no water stress above this)
 VPD_CLOSE = 3.5      # kPa - VPD at which stomata fully close
 PAR_HALF = 200.0     # µmol/m²/s - PAR at half-maximum conductance
 CO2_REF = 400.0      # ppm - reference CO2 for conductance scaling
+G_CUTICULAR = 0.02   # mol/m²/s - cuticular conductance (~5% of g_s_max for cannabis)
 
 
 def stomatal_conductance(PAR, VPD, theta, CO2, g_s_max,
                          theta_wp=THETA_WP, theta_fc=THETA_FC):
-    """Jarvis-type stomatal conductance model.
+    """Jarvis-type stomatal conductance model with cuticular floor.
 
-    g_s = g_s_max * f_light(PAR) * f_vpd(VPD) * f_water(theta) * f_co2(CO2)
+    g_s = max(g_s_max * f_light * f_vpd * f_water * f_co2, g_cuticular * f_water)
 
     Each stress function returns a value in [0, 1] representing the
-    fraction of maximum conductance under that stress.
+    fraction of maximum conductance under that stress. Cuticular
+    conductance provides a VPD-driven floor even when stomata are
+    fully closed (lights off), enabling overnight dryback.
 
     Args:
         PAR: Photosynthetically active radiation in µmol/m²/s.
@@ -61,7 +64,10 @@ def stomatal_conductance(PAR, VPD, theta, CO2, g_s_max,
     f_water = min(max((theta - theta_wp) / (theta_fc - theta_wp), 0.0), 1.0)
     f_co2 = min(max(1.0 - 0.1 * (CO2 - CO2_REF) / CO2_REF, 0.5), 1.2)
 
-    return g_s_max * f_light * f_vpd * f_water * f_co2
+    g_stomatal = g_s_max * f_light * f_vpd * f_water * f_co2
+    g_cuticular = G_CUTICULAR * f_water  # cuticle still needs water in substrate
+
+    return max(g_stomatal, g_cuticular)
 
 
 def transpiration_rate(T_leaf, T_air, w_air, PAR, theta, CO2, LAI, g_s_max,
@@ -146,37 +152,47 @@ def d_gs_dVPD(PAR, VPD, theta, CO2, g_s_max,
               theta_wp=THETA_WP, theta_fc=THETA_FC):
     """Partial derivative of stomatal conductance w.r.t. VPD.
 
-    Used in Jacobian computation.
+    Used in Jacobian computation. When cuticular conductance dominates
+    (lights off), d(g_s)/d(VPD) = 0 since cuticular conductance is
+    VPD-independent.
     """
-    if PAR <= 0 or VPD >= VPD_CLOSE:
-        return 0.0
-
-    f_light = PAR / (PAR + PAR_HALF)
+    # Check if stomatal > cuticular at this operating point
+    f_light = PAR / (PAR + PAR_HALF) if PAR > 0 else 0.0
+    f_vpd = min(max(1.0 - VPD / VPD_CLOSE, 0.05), 1.0)
     f_water = min(max((theta - theta_wp) / (theta_fc - theta_wp), 0.0), 1.0)
     f_co2 = min(max(1.0 - 0.1 * (CO2 - CO2_REF) / CO2_REF, 0.5), 1.2)
 
-    # d(f_vpd)/d(VPD) = -1/VPD_CLOSE (within the linear region)
-    if VPD < VPD_CLOSE:
-        df_vpd = -1.0 / VPD_CLOSE
-    else:
-        df_vpd = 0.0
+    g_stomatal = g_s_max * f_light * f_vpd * f_water * f_co2
+    g_cuticular = G_CUTICULAR * f_water
 
+    # If cuticular dominates, derivative w.r.t. VPD is zero
+    if g_cuticular >= g_stomatal:
+        return 0.0
+
+    if VPD >= VPD_CLOSE:
+        return 0.0
+
+    df_vpd = -1.0 / VPD_CLOSE
     return g_s_max * f_light * df_vpd * f_water * f_co2
 
 
 def d_gs_dtheta(PAR, VPD, theta, CO2, g_s_max,
                 theta_wp=THETA_WP, theta_fc=THETA_FC):
     """Partial derivative of stomatal conductance w.r.t. theta."""
-    if PAR <= 0:
-        return 0.0
-
-    f_light = PAR / (PAR + PAR_HALF)
+    f_light = PAR / (PAR + PAR_HALF) if PAR > 0 else 0.0
     f_vpd = min(max(1.0 - VPD / VPD_CLOSE, 0.05), 1.0)
+    f_water = min(max((theta - theta_wp) / (theta_fc - theta_wp), 0.0), 1.0)
     f_co2 = min(max(1.0 - 0.1 * (CO2 - CO2_REF) / CO2_REF, 0.5), 1.2)
+
+    g_stomatal = g_s_max * f_light * f_vpd * f_water * f_co2
+    g_cuticular = G_CUTICULAR * f_water
 
     if theta_wp <= theta <= theta_fc:
         df_water = 1.0 / (theta_fc - theta_wp)
     else:
         df_water = 0.0
 
+    # Derivative depends on which branch is active
+    if g_cuticular >= g_stomatal:
+        return G_CUTICULAR * df_water
     return g_s_max * f_light * f_vpd * df_water * f_co2
