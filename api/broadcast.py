@@ -194,7 +194,7 @@ class WebSocketBroadcaster:
         })
 
     def notify_sim_progress(self, elapsed_s, duration_s, pct,
-                            phase=None, profile=None):
+                            phase=None, profile=None, substrate=None):
         """Broadcast simulation progress to WS clients."""
         self._schedule({
             'type': 'cortex_sim_progress',
@@ -204,6 +204,7 @@ class WebSocketBroadcaster:
                 'pct': round(pct, 1),
                 'phase': phase,
                 'profile': profile,
+                'substrate': substrate,
             },
         })
 

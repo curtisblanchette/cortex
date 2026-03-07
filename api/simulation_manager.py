@@ -133,13 +133,13 @@ class SimulationManager:
             shared_params = build_shared_params(substrate=substrate)
             dynamics = build_dynamics(configs, shared_params, registry, substrate=substrate)
 
-            # Resolve day theta target for initial state
-            day_cfg = configs['phase'].get('day', {})
-            if substrate is not None and 'theta_target_frac' in day_cfg:
+            # Resolve night theta target for initial state (sim starts at midnight)
+            night_cfg = configs['phase'].get('night', {})
+            if substrate is not None and 'theta_target_frac' in night_cfg:
                 awc = substrate.theta_fc - substrate.theta_wp
-                theta_init = substrate.theta_wp + float(day_cfg['theta_target_frac']) * awc
+                theta_init = substrate.theta_wp + float(night_cfg['theta_target_frac']) * awc
             else:
-                theta_init = day_cfg.get('theta_target', 0.35)
+                theta_init = night_cfg.get('theta_target', 0.30)
 
             io, sim_room = build_simulation_io(configs, registry, substrate=substrate,
                                                 theta_init=theta_init)
@@ -230,6 +230,7 @@ class SimulationManager:
                     broadcaster.notify_sim_progress(
                         elapsed, duration, pct,
                         phase=phase, profile=profile,
+                        substrate=substrate_name,
                     )
 
             solver.set_telemetry_callback(telemetry_cb)

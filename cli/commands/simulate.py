@@ -87,25 +87,27 @@ def _run_decoupled(args):
     phase = getattr(args, 'phase', None)
     profile = getattr(args, 'profile', None)
     substrate_name = getattr(args, 'substrate', None)
-    print(f"[Cortex] Starting DECOUPLED simulation "
-          f"({args.duration}s, fast={args.fast}"
-          f"{f', phase={phase}' if phase else ''}"
-          f"{f', profile={profile}' if profile else ''}"
-          f"{f', substrate={substrate_name}' if substrate_name else ''})")
 
     configs = load_configs(args.config, phase_override=phase)
     substrate = build_substrate(configs, substrate_override=substrate_name)
+
+    resolved_phase = configs['phase'].get('phase', phase or 'mid_flower')
+    print(f"[Cortex] Starting DECOUPLED simulation "
+          f"({args.duration}s, fast={args.fast}, "
+          f"phase={resolved_phase}, "
+          f"profile={profile or 'hvacd_full'}, "
+          f"substrate={substrate.name})")
     registry = build_registry(configs, profile_override=profile, substrate=substrate)
     shared_params = build_shared_params(substrate=substrate)
     dynamics = build_dynamics(configs, shared_params, registry, substrate=substrate)
 
-    # Resolve day theta target for initial state (same logic as reference.py)
-    day_cfg = configs['phase'].get('day', {})
-    if substrate is not None and 'theta_target_frac' in day_cfg:
+    # Resolve night theta target for initial state (sim starts at midnight)
+    night_cfg = configs['phase'].get('night', {})
+    if substrate is not None and 'theta_target_frac' in night_cfg:
         awc = substrate.theta_fc - substrate.theta_wp
-        theta_init = substrate.theta_wp + float(day_cfg['theta_target_frac']) * awc
+        theta_init = substrate.theta_wp + float(night_cfg['theta_target_frac']) * awc
     else:
-        theta_init = day_cfg.get('theta_target', 0.35)
+        theta_init = night_cfg.get('theta_target', 0.30)
 
     io, sim_room = build_simulation_io(configs, registry, substrate=substrate,
                                         theta_init=theta_init)
