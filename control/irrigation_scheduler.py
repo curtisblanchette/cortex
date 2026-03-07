@@ -1,8 +1,9 @@
 """Irrigation Scheduler — shot-based binary irrigation.
 
-Replaces MPC-optimized continuous irrigation with a discrete state machine
-that fires fixed-duration shots based on theta depletion. The MPC retains
-the u_irr column (locked to 0) for theta prediction accuracy.
+Fires fixed-duration shots based on theta depletion. Irrigation is a
+feedforward disturbance (not an MPC control variable) — the scheduler
+sets self.current_rate which the control loop injects into the
+disturbance vector d[5] before physics integration.
 
 State machine:
     IDLE ──[in window]──> WAITING ──[theta ≤ trigger]──> FIRING ──[duration elapsed]──> COOLDOWN
@@ -41,19 +42,22 @@ class IrrigationConfig:
 class IrrigationScheduler:
     """Shot-based irrigation state machine.
 
-    Ticks each sim step, reads theta from EKF state, and writes
-    u_irr = 0 or 100 into the control vector in-place.
+    Ticks each sim step, reads theta from EKF state, and sets
+    self.current_rate (m³/m³/s theta injection rate) for the
+    disturbance vector.
     """
 
-    def __init__(self, config, substrate, registry, light_schedule,
-                 flow_rate_ml_s, canopy_area_m2, theta_target=None):
+    def __init__(self, config, substrate, light_schedule,
+                 flow_rate_ml_s, N_plants, container_volume_L,
+                 canopy_area_m2, theta_target=None):
         """
         Args:
             config: IrrigationConfig with phase-specific timing.
             substrate: SubstrateProfile (for theta_fc, theta_wp).
-            registry: ActuatorRegistry (for u_irr channel index).
             light_schedule: LightSchedule instance.
-            flow_rate_ml_s: Manifold flow rate (used for logging only).
+            flow_rate_ml_s: Manifold flow rate (ml/s at 100%).
+            N_plants: Plant count.
+            container_volume_L: Per-plant container volume in liters.
             canopy_area_m2: Canopy area (used for logging only).
             theta_target: Resolved day theta target. Trigger is computed
                           relative to this so irrigation oscillates around
@@ -65,11 +69,9 @@ class IrrigationScheduler:
         self.flow_rate_ml_s = flow_rate_ml_s
         self.canopy_area_m2 = canopy_area_m2
 
-        # Find u_irr index in the control vector
-        names = registry.channel_names
-        if 'u_irr' not in names:
-            raise ValueError("IrrigationScheduler requires u_irr in registry")
-        self._irr_idx = names.index('u_irr')
+        # Compute the theta injection rate when firing (m³/m³/s)
+        V_sub = container_volume_L * N_plants / 1000.0  # m³ total substrate
+        self._irr_rate = (flow_rate_ml_s / 1e6) / V_sub  # m³/m³/s
 
         # Theta trigger: dryback below target by fraction * AWC
         awc = substrate.theta_fc - substrate.theta_wp
@@ -87,6 +89,9 @@ class IrrigationScheduler:
         self._daily_shots = 0
         self._last_lights_on = None         # for daily reset detection
 
+        # Current irrigation rate — read by control loop for d[5]
+        self.current_rate = 0.0
+
         # Telemetry
         self.shot_log = []  # list of (start_time_s, end_time_s)
 
@@ -94,10 +99,10 @@ class IrrigationScheduler:
     def state(self):
         return self._state
 
-    def tick(self, x_hat, current_time_s, u_vector):
+    def tick(self, x_hat, current_time_s):
         """Main loop entry — call each sim tick.
 
-        Reads theta from x_hat[4], modifies u_vector[irr_idx] in-place.
+        Reads theta from x_hat[4], sets self.current_rate.
         """
         self._maybe_reset_daily(current_time_s)
 
@@ -106,27 +111,27 @@ class IrrigationScheduler:
         # If lights are off, force back to IDLE (except FIRING completes)
         if not lights_on and self._state != IrrState.FIRING:
             self._state = IrrState.IDLE
-            u_vector[self._irr_idx] = 0.0
+            self.current_rate = 0.0
             return
 
         theta = x_hat[4]
 
         if self._state == IrrState.IDLE:
-            self._handle_idle(current_time_s, lights_on, u_vector)
+            self._handle_idle(current_time_s, lights_on)
         elif self._state == IrrState.WAITING:
-            self._handle_waiting(theta, current_time_s, lights_on, u_vector)
+            self._handle_waiting(theta, current_time_s, lights_on)
         elif self._state == IrrState.FIRING:
-            self._handle_firing(current_time_s, u_vector)
+            self._handle_firing(current_time_s)
         elif self._state == IrrState.COOLDOWN:
-            self._handle_cooldown(current_time_s, u_vector)
+            self._handle_cooldown(current_time_s)
 
-    def _handle_idle(self, current_time_s, lights_on, u_vector):
-        u_vector[self._irr_idx] = 0.0
+    def _handle_idle(self, current_time_s, lights_on):
+        self.current_rate = 0.0
         if lights_on and self._in_irrigation_window(current_time_s, lights_on):
             self._state = IrrState.WAITING
 
-    def _handle_waiting(self, theta, current_time_s, lights_on, u_vector):
-        u_vector[self._irr_idx] = 0.0
+    def _handle_waiting(self, theta, current_time_s, lights_on):
+        self.current_rate = 0.0
 
         # Window closed?
         if not self._in_irrigation_window(current_time_s, lights_on):
@@ -148,20 +153,20 @@ class IrrigationScheduler:
             self._shot_start_time = current_time_s
             self._last_shot_start_time = current_time_s
             self._daily_shots += 1
-            u_vector[self._irr_idx] = 100.0
+            self.current_rate = self._irr_rate
 
-    def _handle_firing(self, current_time_s, u_vector):
-        u_vector[self._irr_idx] = 100.0
+    def _handle_firing(self, current_time_s):
+        self.current_rate = self._irr_rate
         elapsed = current_time_s - self._shot_start_time
         if elapsed >= self.config.shot_duration_s:
             # Shot complete — log it
             self.shot_log.append((self._shot_start_time, current_time_s))
             self._state = IrrState.COOLDOWN
             self._cooldown_start_time = current_time_s
-            u_vector[self._irr_idx] = 0.0
+            self.current_rate = 0.0
 
-    def _handle_cooldown(self, current_time_s, u_vector):
-        u_vector[self._irr_idx] = 0.0
+    def _handle_cooldown(self, current_time_s):
+        self.current_rate = 0.0
         elapsed = current_time_s - self._cooldown_start_time
         if elapsed >= self.config.drain_settle_s:
             self._state = IrrState.WAITING

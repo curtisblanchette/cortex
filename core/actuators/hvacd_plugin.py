@@ -50,6 +50,9 @@ class HVACDPlugin(ActuatorPlugin):
         self.hvacd = HVACDModel(hvacd_config)
         self.COP = hvacd_config.get('COP', 3.5)
         self.fresh_air_fraction = hvacd_config.get('fresh_air_fraction', 0.0)
+        limits = hvacd_config.get('limits', {})
+        self.fan_min = limits.get('fan_min_pct', 20.0)
+        self.fan_max = limits.get('fan_max_pct', 100.0)
         self._last_effort = {}
 
     def name(self) -> str:
@@ -73,7 +76,14 @@ class HVACDPlugin(ActuatorPlugin):
 
     def compute_physics(self, x, u_local, d, params, room_props):
         T_a, w_a, C, T_l, theta, T_s, T_w = x
-        fan_pct = room_props.get('fan_pct', 0.5)
+
+        # HVACD blower speed is managed by the unit's onboard controller
+        # (e.g., Desert Aire CM3550), not by the MPC. The blower runs at
+        # full speed for maximum total capacity; the real hardware modulates
+        # fan speed internally to shift sensible heat ratio (SHR) between
+        # cooling and dehumidification via VPDsync-style logic.
+        # TODO: model internal SHR modulation (fan speed + hot gas reheat)
+        fan_pct = 1.0
 
         # Build a full-format u vector that HVACDModel expects:
         # [T_sp/u_cool, RH_sp/u_heat, _, _, u_fan_pct, _]
@@ -104,7 +114,7 @@ class HVACDPlugin(ActuatorPlugin):
         RH_error = RH - RH_sp
         if RH_error > 0:
             dehum_fraction = min(RH_error / self.hvacd.dehum_band, 1.0)
-            dehum_L_hr = self.hvacd.dehum_max * dehum_fraction
+            dehum_L_hr = self.hvacd.dehum_max * dehum_fraction * fan_pct
             w_removal = dehum_L_hr * 1000.0 / (rho_air * V) / 3600.0
         else:
             dehum_fraction = 0.0

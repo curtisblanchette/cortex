@@ -185,17 +185,13 @@ def build_co2_scheduler(configs, registry, light_schedule, reference):
     )
 
 
-def build_irrigation_scheduler(configs, registry, substrate, light_schedule):
+def build_irrigation_scheduler(configs, substrate, light_schedule):
     """Build IrrigationScheduler from configs.
 
     Returns IrrigationScheduler or None if:
-      - u_irr is not in the active profile
       - the phase config disables irrigation (enabled: false)
       - no irrigation_schedule block in phase config
     """
-    if 'u_irr' not in registry.channel_names:
-        return None
-
     phase_cfg = configs['phase']
     irr_cfg = phase_cfg.get('irrigation_schedule')
     if irr_cfg is None:
@@ -225,21 +221,20 @@ def build_irrigation_scheduler(configs, registry, substrate, light_schedule):
         drain_settle_s=irr_cfg.get('drain_settle_min', substrate.drain_settle_min) * 60.0,
     )
 
-    # Get equipment-level defaults
-    equip = configs['equipment']
-    actuators = equip.get('actuators', {})
-    irr_equip = actuators.get('irrigation', {})
-    flow_rate_ml_s = irr_equip.get('flow_rate_ml_s', 5000.0)
-
     room = configs['room'].get('room', configs['room'])
     canopy_area_m2 = room.get('canopy_area_m2', 56.0)
+    N_plants = room.get('N_plants', 100)
+
+    # Per-plant flow rate from substrate, scaled to total manifold flow
+    flow_rate_ml_s = substrate.irr_flow_ml_s * N_plants
 
     return IrrigationScheduler(
         config=config,
         substrate=substrate,
-        registry=registry,
         light_schedule=light_schedule,
         flow_rate_ml_s=flow_rate_ml_s,
+        N_plants=N_plants,
+        container_volume_L=substrate.container_volume_L,
         canopy_area_m2=canopy_area_m2,
         theta_target=day_theta,
     )

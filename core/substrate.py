@@ -33,6 +33,7 @@ class SubstrateProfile:
     K_drain_default: float
     K_drain_bounds: tuple  # (lower, upper)
     porosity: float
+    irr_flow_ml_s: float = 50.0         # per-plant irrigation flow rate (ml/s)
     shot_duration_s: float = 15.0       # seconds per irrigation event
     min_interval_min: float = 45.0      # minimum minutes between events
     drain_settle_min: float = 5.0       # cooldown after shot for drainage
@@ -50,6 +51,7 @@ SUBSTRATE_PROFILES = {
         K_drain_default=0.05,
         K_drain_bounds=(0.005, 0.5),
         porosity=0.95,
+        irr_flow_ml_s=50.0,        # drip stakes, ~18 L/hr per plant
         shot_duration_s=15.0,
         min_interval_min=45.0,
         drain_settle_min=5.0,
@@ -64,6 +66,7 @@ SUBSTRATE_PROFILES = {
         K_drain_default=0.10,
         K_drain_bounds=(0.01, 1.0),
         porosity=0.97,
+        irr_flow_ml_s=15.0,        # precision drip, ~4 L/hr per plant
         shot_duration_s=8.0,
         min_interval_min=30.0,
         drain_settle_min=3.0,
@@ -78,6 +81,7 @@ SUBSTRATE_PROFILES = {
         K_drain_default=0.20,
         K_drain_bounds=(0.05, 2.0),
         porosity=0.90,
+        irr_flow_ml_s=45.0,        # drip emitters, ~16 L/hr per plant
         shot_duration_s=10.0,
         min_interval_min=20.0,
         drain_settle_min=2.0,
@@ -92,6 +96,7 @@ SUBSTRATE_PROFILES = {
         K_drain_default=0.03,   # slow percolation through deep soil column
         K_drain_bounds=(0.005, 0.2),
         porosity=0.55,          # mineral soil has less air space than soilless
+        irr_flow_ml_s=125.0,       # flood/high-flow drip, ~450 L/hr per plant
         shot_duration_s=60.0,
         min_interval_min=120.0,
         drain_settle_min=15.0,
@@ -152,6 +157,7 @@ def load_substrate_profile(substrate_config=None,
         K_drain_bounds=tuple(overrides.get('K_drain_bounds',
                                            list(base.K_drain_bounds))),
         porosity=overrides.get('porosity', base.porosity),
+        irr_flow_ml_s=overrides.get('irr_flow_ml_s', base.irr_flow_ml_s),
         shot_duration_s=overrides.get('shot_duration_s', base.shot_duration_s),
         min_interval_min=overrides.get('min_interval_min', base.min_interval_min),
         drain_settle_min=overrides.get('drain_settle_min', base.drain_settle_min),

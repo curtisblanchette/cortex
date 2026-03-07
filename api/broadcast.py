@@ -111,6 +111,7 @@ class WebSocketBroadcaster:
                 'state': {
                     'VPD': round(float(derived.get('VPD', 0)), 3),
                     'T_air': round(float(x_hat[0]), 2),
+                    'T_leaf': round(float(x_hat[3]), 2),
                     'RH': round(float(derived.get('RH', 0)), 1),
                     'CO2': round(float(x_hat[2]), 1),
                     'theta': round(float(x_hat[4]), 4),
@@ -132,6 +133,7 @@ class WebSocketBroadcaster:
 
         traj_VPD = []
         traj_T = []
+        traj_T_leaf = []
         traj_RH = []
         traj_CO2 = []
         traj_w_a = []
@@ -140,6 +142,7 @@ class WebSocketBroadcaster:
             traj_VPD.append(round(d['VPD'], 3))
             traj_RH.append(round(d['RH'], 1))
             traj_T.append(round(float(trajectory[i, 0]), 2))
+            traj_T_leaf.append(round(float(trajectory[i, 3]), 2))
             traj_CO2.append(round(float(trajectory[i, 2]), 1))
             traj_w_a.append(round(float(trajectory[i, 1]), 2))
 
@@ -158,6 +161,7 @@ class WebSocketBroadcaster:
                 'horizon_steps': len(trajectory),
                 'trajectory_VPD': traj_VPD,
                 'trajectory_T': traj_T,
+                'trajectory_T_leaf': traj_T_leaf,
                 'trajectory_RH': traj_RH,
                 'trajectory_CO2': traj_CO2,
                 'trajectory_w_a': traj_w_a,

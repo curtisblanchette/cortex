@@ -28,11 +28,11 @@ PLUGIN_CLASSES = {
 # Built-in profiles
 PROFILES = {
     'hvacd_full': [
-        'hvacd', 'humidifier', 'co2_injector', 'fan', 'irrigation',
+        'hvacd', 'humidifier', 'co2_injector', 'fan',
     ],
     'ac_dehum': [
         'standalone_ac', 'standalone_dehumidifier', 'humidifier',
-        'heater', 'co2_injector', 'fan', 'irrigation',
+        'heater', 'co2_injector', 'fan',
     ],
     'ac_minimal': [
         'standalone_ac', 'co2_injector', 'fan',

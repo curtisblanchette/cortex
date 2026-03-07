@@ -14,14 +14,15 @@ State vector x (7):
     x[6] T_w    Wall/thermal mass temperature C
 
 Control vector u (n_u, determined by ActuatorRegistry):
-    Default hvacd_full profile: [T_sp, RH_sp, u_hum, u_co2, u_fan, u_irr]
+    Default hvacd_full profile: [T_sp, RH_sp, u_hum, u_co2, u_fan]
 
-Disturbance vector d (5):
+Disturbance vector d (6):
     d[0] Q_light   Lighting heat load          W
     d[1] T_out     Outdoor temperature          C
     d[2] w_out     Outdoor absolute humidity    g/kg
     d[3] N_plants  Plant count                  -
     d[4] phase     Growth phase (int enum)      -
+    d[5] irr_rate  Irrigation theta rate        m3/m3/s
 """
 
 import numpy as np
@@ -47,7 +48,7 @@ I_TS = 5   # Supply air temperature
 I_TW = 6   # Wall temperature
 
 N_STATES = 7
-N_DISTURBANCES = 5
+N_DISTURBANCES = 6
 
 # Physical constants
 RHO_AIR = 1.2       # kg/m3
@@ -176,6 +177,7 @@ class GrowRoomDynamics:
         T_out = d[1]
         w_out = d[2]
         N_plants = d[3]
+        irr_rate = d[5] if len(d) > 5 else 0.0
 
         UA_wall = params.UA_wall
         UA_env = params.UA_env
@@ -223,6 +225,13 @@ class GrowRoomDynamics:
         E_m3 = E_rate * self.A_canopy / (1e6 * V_sub * 3600.0)
         drain_rate = K_drain / 3600.0 * max(theta - self.substrate.theta_drain, 0.0)
 
+        # Irrigation: d[5] = theta injection rate from scheduler (m³/m³/s).
+        # Surface evaporation: ~5% of irrigation water evaporates directly to air.
+        irr_evap_fraction = 0.05
+        irr_vol_m3s = irr_rate * V_sub  # m³/s of water entering substrate
+        dw_irr_evap = (irr_evap_fraction * irr_vol_m3s * 1e6
+                       / (self.rho_air * self.V) / 3600.0)
+
         # Convective heat exchange from supply air duct
         Q_supply = fx.supply_airflow_W_per_K * (T_s - T_a)
 
@@ -241,7 +250,8 @@ class GrowRoomDynamics:
         dwa = (
             E_rate * self.A_canopy / (self.rho_air * self.V * 3600.0) +
             fx.dw_dt +
-            w_infiltration
+            w_infiltration +
+            dw_irr_evap
         )
 
         # ODE 3: dC/dt
@@ -267,7 +277,8 @@ class GrowRoomDynamics:
 
         # ODE 5: dtheta/dt
         dtheta = (
-            fx.dtheta_dt -
+            fx.dtheta_dt +
+            irr_rate -
             E_m3 -
             drain_rate
         )
@@ -295,14 +306,14 @@ class GrowRoomDynamics:
         Args:
             x0: Operating point state (7,).
             u0: Operating point control (n_u,).
-            d0: Operating point disturbance (5,).
+            d0: Operating point disturbance (6,).
             params: CalibrationParams.
             dt: Discretization step in seconds (default 60s for MPC).
 
         Returns:
             A_d: Discrete state matrix (7, 7).
             B_d: Discrete control input matrix (7, n_u).
-            Bd_d: Discrete disturbance input matrix (7, 5).
+            Bd_d: Discrete disturbance input matrix (7, 6).
             c_d: Discrete affine offset (7,).
         """
         A_c, B_c, Bd_c = self._analytical_jacobians(x0, u0, d0, params)
@@ -342,7 +353,7 @@ class GrowRoomDynamics:
 
         h_x = np.array([0.01, 0.01, 1.0, 0.01, 0.001, 0.01, 0.01])
         h_u = self.registry.h_u
-        h_d = np.array([100.0, 0.1, 0.01, 1.0, 0.1])
+        h_d = np.array([100.0, 0.1, 0.01, 1.0, 0.1, 0.0001])
 
         # A_c = df/dx
         A_c = np.zeros((n_x, n_x))
@@ -378,7 +389,7 @@ class GrowRoomDynamics:
         # Bd_c = df/dd
         # Physical lower bounds for disturbances to prevent unphysical
         # perturbations (e.g., negative Q_light) that produce wrong signs.
-        d_lower = np.array([0.0, -50.0, 0.0, 0.0, 0.0])
+        d_lower = np.array([0.0, -50.0, 0.0, 0.0, 0.0, 0.0])
         Bd_c = np.zeros((n_x, n_d))
         for j in range(n_d):
             d_plus = d0.copy()
@@ -460,4 +471,5 @@ class GrowRoomDynamics:
             12.0,     # w_out: 12 g/kg outdoor humidity
             100.0,    # N_plants
             3.0,      # phase: mid_flower
+            0.0,      # irr_rate: no irrigation
         ])

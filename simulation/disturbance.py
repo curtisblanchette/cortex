@@ -4,12 +4,13 @@ Generates realistic disturbance profiles: lighting schedule, outdoor
 weather, plant count, and growth phase. These are the things that
 happen TO the room that the controller must respond to.
 
-Disturbance vector d (5):
+Disturbance vector d (6):
     d[0] Q_light   Lighting heat load          W
     d[1] T_out     Outdoor temperature          °C
     d[2] w_out     Outdoor absolute humidity    g/kg
     d[3] N_plants  Plant count                  -
     d[4] phase     Growth phase (int enum)      -
+    d[5] irr_rate  Irrigation theta rate        m³/m³/s
 """
 
 import numpy as np
@@ -50,6 +51,9 @@ class DisturbanceScheduler:
         # Light transition (ramp over 60s to avoid step discontinuity)
         self._ramp_s = 60.0
 
+        # Irrigation rate — set externally by irrigation scheduler
+        self.irr_rate = 0.0
+
     def get(self, time_s):
         """Return disturbance vector d at simulation time.
 
@@ -69,7 +73,8 @@ class DisturbanceScheduler:
             2.0 * np.pi * (hour - 14.0) / 24.0
         )
 
-        return np.array([Q_light, T_out, self.w_out, self.N_plants, self._phase_int])
+        return np.array([Q_light, T_out, self.w_out, self.N_plants, self._phase_int,
+                         self.irr_rate])
 
     def _light_heat(self, hour):
         """Compute lighting heat load with smooth ramp transitions."""
@@ -116,7 +121,7 @@ class DisturbanceScheduler:
             d_forecast: Array of shape (N_steps, 5).
         """
         n_steps = int(horizon_s / step_s)
-        forecast = np.zeros((n_steps, 5))
+        forecast = np.zeros((n_steps, 6))
         for k in range(n_steps):
             forecast[k] = self.get(time_s + k * step_s)
         return forecast

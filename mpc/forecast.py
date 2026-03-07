@@ -34,25 +34,24 @@ class DisturbanceForecast:
 
         Args:
             current_time_s: Current time in seconds.
-            current_d: Current disturbance vector (5,).
+            current_d: Current disturbance vector (6,).
             horizon_steps: Number of steps in prediction horizon.
             step_s: Seconds per prediction step.
 
         Returns:
-            forecast: Disturbance forecast (horizon_steps, 5).
+            forecast: Disturbance forecast (horizon_steps, 6).
         """
         forecast = np.zeros((horizon_steps, self.n_d))
 
         for k in range(horizon_steps):
             future_time = current_time_s + k * step_s
 
-            # Lighting: persistence forecast (hold current level).
-            # The transpiration model creates a strong nonlinearity at
-            # Q_light=0 that makes linearization across light transitions
-            # produce wrong-signed Jacobians.  Holding the current level
-            # keeps linearization valid; the cold start at the actual
-            # transition re-linearizes at the new operating point.
-            forecast[k, 0] = current_d[0]
+            # Lighting: scheduled forecast from light schedule.
+            # _light_heat() applies the same smooth ramp as the simulation,
+            # letting the MPC pre-cool before lights-on and pre-heat before
+            # lights-off.  Cold-start re-linearization at the actual
+            # transition still corrects any accumulated Jacobian error.
+            forecast[k, 0] = self._light_heat(future_time)
 
             # Outdoor weather: persistence forecast (hold current)
             forecast[k, 1] = current_d[1]  # T_out
@@ -61,6 +60,11 @@ class DisturbanceForecast:
             # Plant/phase: constant over horizon
             forecast[k, 3] = current_d[3]  # N_plants
             forecast[k, 4] = current_d[4]  # phase
+
+            # Irrigation: not forecast (scheduler-driven discrete events).
+            # The Bd column for d[5] captures theta/humidity sensitivity;
+            # the EKF observes theta changes in real-time.
+            forecast[k, 5] = 0.0
 
         return forecast
 

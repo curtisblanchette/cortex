@@ -152,9 +152,7 @@ class SimulationManager:
             failsafe = build_failsafe()
 
             irr_scheduler = build_irrigation_scheduler(
-                configs, registry, substrate, light_schedule)
-            if irr_scheduler:
-                mpc.constraints.lock_channel('u_irr', 0.0)
+                configs, substrate, light_schedule)
 
             co2_scheduler = build_co2_scheduler(
                 configs, registry, light_schedule, reference)
@@ -269,7 +267,8 @@ class SimulationManager:
 
                     if irr_scheduler:
                         x_hat = solver.ekf.x_hat
-                        irr_scheduler.tick(x_hat, solver.io.get_time(), solver.last_u)
+                        irr_scheduler.tick(x_hat, solver.io.get_time())
+                        sim_room.disturbance_schedule.irr_rate = irr_scheduler.current_rate
 
                     if co2_scheduler:
                         co2_scheduler.tick(solver.ekf.x_hat, solver.io.get_time(), solver.last_u)

@@ -240,9 +240,8 @@ def plot_simulation(data, compliance_report, duration_s, output_path):
     # ===== Panel 1: Temperature =====
     ax1 = fig.add_subplot(gs[0, 0])
     shade_lights(ax1, t, d)
-    ax1.plot(t, x[:, 0], color=C_ACTUAL, linewidth=1.2, label='T_air (EKF)', zorder=3)
-    ax1.plot(t, x_true[:, 0], color=C_TRUE, linewidth=0.7, alpha=0.5, label='T_air (true)', zorder=2)
-    ax1.plot(t, x[:, 3], color='#FF7043', linewidth=0.8, label='T_leaf', zorder=3)
+    ax1.plot(t, x[:, 0], color='#FF9800', linewidth=1.2, label='T_air', zorder=3)
+    ax1.plot(t, x[:, 3], color='#D32F2F', linewidth=1.2, label='T_leaf', zorder=3)
     ax1.plot(t, data['t_target'], color=C_TARGET, linewidth=1.5, linestyle='--', label='Target', zorder=4)
     tol = 1.0
     ax1.fill_between(t, data['t_target'] - tol, data['t_target'] + tol,
