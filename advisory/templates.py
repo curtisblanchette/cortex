@@ -224,6 +224,62 @@ def co2_flow_none():
     return title, body, rec
 
 
+def leaf_temp_deficit(deficit, traj_mean_deficit, lights_on):
+    """Leaf temperature deficit advisory.
+
+    deficit         = T_air - T_leaf (°C), current estimate
+    traj_mean_deficit = mean deficit over prediction horizon (°C)
+    lights_on       = whether lights are currently on
+    """
+    if deficit > 0:
+        direction = 'high'
+        body_cause = (
+            'A large leaf-to-air temperature gap indicates excessive transpiration '
+            'or poor canopy airflow — leaves are over-cooling relative to air.'
+        )
+        if deficit > 7.0:
+            severity = 'critical'
+            title = f'Leaf temperature deficit critical ({deficit:.1f}°C)'
+            rec = (
+                'Check canopy fan operation immediately. '
+                'Consider reducing VPD target or increasing airflow. '
+                'Severe deficit can indicate stomatal stress or light burn.'
+            )
+        elif deficit > 5.0:
+            severity = 'warning'
+            title = f'Leaf temperature deficit elevated ({deficit:.1f}°C)'
+            rec = (
+                'Verify canopy fans are running at target speed. '
+                'Consider a small VPD reduction (0.1–0.2 kPa) to ease transpiration load.'
+            )
+        else:
+            severity = 'info'
+            title = f'Leaf temperature deficit above normal ({deficit:.1f}°C)'
+            rec = 'Monitor airflow and VPD. Deficit may be transient during high-transpiration periods.'
+    else:
+        direction = 'reversed'
+        body_cause = (
+            'Leaf temperature is warmer than air — stomata may be partially closed '
+            '(drought or salt stress) or a radiant heat source is warming leaves directly.'
+        )
+        severity = 'warning'
+        title = f'Leaf temperature reversed — leaf warmer than air ({deficit:.1f}°C)'
+        rec = (
+            'Check substrate moisture and root zone. '
+            'Verify no direct radiant heat source near canopy. '
+            'May indicate stomatal closure from drought or high EC.'
+        )
+
+    phase_str = 'lights-on' if lights_on else 'lights-off'
+    body = (
+        f'Current T_air − T_leaf = {deficit:.1f}°C ({phase_str}). '
+        f'Healthy range: 1–3°C.\n'
+        f'Predicted mean over MPC horizon: {traj_mean_deficit:.1f}°C.\n'
+        f'{body_cause}'
+    )
+    return severity, title, body, rec
+
+
 def compliance_declining(channel, pct, mean, std, min_val, max_val, tolerance):
     title = f'{channel} compliance declining'
     body = (

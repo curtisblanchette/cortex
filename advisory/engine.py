@@ -14,6 +14,7 @@ from .models import (
     Advisory, SEVERITY_ORDER, DEFAULT_COOLDOWN_S,
     TYPE_ENV_BREACH, TYPE_ENV_TREND, TYPE_LIGHT_TRANSITION, TYPE_MODEL_DRIFT,
     TYPE_SOLVER_DEGRADED, TYPE_COMPLIANCE_DECLINING, TYPE_CO2_FLOW,
+    TYPE_LEAF_TEMP_DEFICIT,
     severity_from_eta, confidence_from_step,
 )
 from . import templates
@@ -26,6 +27,12 @@ _STATE_WA = 1
 _STATE_CO2 = 2
 _STATE_TL = 3
 _STATE_THETA = 4
+
+# Leaf temperature deficit thresholds (T_air - T_leaf, °C)
+_LTD_INFO = 3.0       # above this: mild concern
+_LTD_WARNING = 5.0    # above this: significant stress
+_LTD_CRITICAL = 7.0   # above this: severe stress
+_LTD_REVERSED = 0.0   # below this (leaf > air): stomatal closure / radiant heat
 
 # Channels and their mapping to trajectory data
 # VPD and RH are derived (not direct state columns), handled separately
@@ -142,6 +149,7 @@ class AdvisoryEngine:
         if trajectory is not None and ref_targets is not None:
             self._check_env_breach(
                 trajectory, x_hat, ref_targets, step_s, current_time, now,
+                light_schedule=light_schedule,
             )
 
         self._check_light_transition(
@@ -158,6 +166,8 @@ class AdvisoryEngine:
         co2_sched = co2_scheduler or self.co2_scheduler
         if co2_sched is not None:
             self._check_co2_flow(co2_sched, now)
+
+        self._check_leaf_temp_deficit(trajectory, x_hat, current_time, light_schedule, now)
 
     # -- Public API --
 
@@ -180,7 +190,7 @@ class AdvisoryEngine:
     # -- Detection logic --
 
     def _check_env_breach(self, trajectory, x_hat, ref_targets, step_s,
-                          current_time, now):
+                          current_time, now, light_schedule=None):
         """Scan predicted trajectory for compliance breaches.
 
         Two layers of detection:
@@ -191,6 +201,12 @@ class AdvisoryEngine:
         """
         Np = len(trajectory)
         horizon_s = Np * step_s
+
+        # CO2 drifts to ambient during lights-off (injection disabled) —
+        # suppress CO2 advisories when lights are off to avoid false alarms.
+        lights_on = True
+        if light_schedule is not None:
+            lights_on = light_schedule.is_on(current_time)
 
         # Compute derived outputs (VPD, RH) for each trajectory step
         traj_vpd = np.empty(Np)
@@ -214,6 +230,18 @@ class AdvisoryEngine:
             target = ref_targets.get(channel)
             tol = self.tolerances.get(channel)
             if target is None or tol is None:
+                continue
+
+            # Skip CO2 breach detection during lights-off — injection is
+            # disabled so CO2 naturally settles at ambient (~420 ppm).
+            if channel == 'CO2' and not lights_on:
+                # Resolve any active CO2 advisory from the lights-on period
+                breach_key = (TYPE_ENV_BREACH, channel)
+                trend_key = (TYPE_ENV_TREND, channel)
+                if breach_key in self._active and not self._active[breach_key].resolved:
+                    self._active[breach_key].resolved = True
+                if trend_key in self._active and not self._active[trend_key].resolved:
+                    self._active[trend_key].resolved = True
                 continue
 
             # --- Layer 1: direct breach within MPC horizon ---
@@ -668,6 +696,65 @@ class AdvisoryEngine:
             # Healthy — resolve
             if key in self._active:
                 self._active[key].resolved = True
+
+    def _check_leaf_temp_deficit(self, trajectory, x_hat, current_time,
+                                  light_schedule, now):
+        """Warn when T_air - T_leaf exceeds healthy bounds.
+
+        A large positive deficit (leaf much cooler than air) signals excessive
+        transpiration or poor canopy airflow. A negative deficit (leaf warmer
+        than air) signals stomatal closure from drought/salt stress or direct
+        radiant heating of the canopy.
+
+        Thresholds:
+          deficit > 3°C  → info
+          deficit > 5°C  → warning
+          deficit > 7°C  → critical
+          deficit < 0°C  → warning (reversed)
+        """
+        key = (TYPE_LEAF_TEMP_DEFICIT, 'T_leaf')
+
+        if x_hat is None:
+            return
+
+        deficit = float(x_hat[_STATE_T] - x_hat[_STATE_TL])
+
+        # Compute mean deficit over prediction horizon
+        if trajectory is not None and len(trajectory) > 0:
+            traj_deficit = trajectory[:, _STATE_T] - trajectory[:, _STATE_TL]
+            traj_mean = float(np.mean(traj_deficit))
+        else:
+            traj_mean = deficit
+
+        lights_on = True
+        if light_schedule is not None:
+            lights_on = light_schedule.is_on(current_time)
+
+        # Check thresholds — reversed and elevated are separate conditions
+        in_bounds = _LTD_REVERSED <= deficit <= _LTD_INFO
+        if in_bounds:
+            if key in self._active and not self._active[key].resolved:
+                self._active[key].resolved = True
+            return
+
+        severity, title, body, rec = templates.leaf_temp_deficit(
+            deficit, traj_mean, lights_on,
+        )
+
+        advisory = Advisory(
+            type=TYPE_LEAF_TEMP_DEFICIT,
+            severity=severity,
+            channel='T_leaf',
+            title=title,
+            body=body,
+            recommendation=rec,
+            current_value=round(deficit, 2),
+            predicted_value=round(traj_mean, 2),
+            confidence=0.9,
+            room_id=self.room_id,
+            phase=self.phase_name,
+        )
+        self._emit(key, advisory, now)
 
     def _check_co2_flow(self, co2_scheduler, now):
         """Check CO2 flow rate during injection against expected rate."""

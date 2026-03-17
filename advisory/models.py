@@ -21,6 +21,7 @@ TYPE_MODEL_DRIFT = 'model_drift'
 TYPE_SOLVER_DEGRADED = 'solver_degraded'
 TYPE_COMPLIANCE_DECLINING = 'compliance_declining'
 TYPE_CO2_FLOW = 'co2_flow'
+TYPE_LEAF_TEMP_DEFICIT = 'leaf_temp_deficit'
 
 # Channels
 CHANNELS = ('VPD', 'T', 'RH', 'CO2', 'theta')
@@ -34,6 +35,7 @@ DEFAULT_TTLS = {
     TYPE_SOLVER_DEGRADED: 300,
     TYPE_COMPLIANCE_DECLINING: 900,
     TYPE_CO2_FLOW: 600,
+    TYPE_LEAF_TEMP_DEFICIT: 600,
 }
 
 # Cooldown before re-firing same (type, channel) pair
