@@ -167,6 +167,9 @@ class SolverProcess:
             self._ema_delta_T_leaf = None  # re-seed on light transition
             self._vpd_integral = 0.0       # prevent stale bias carrying over
             self._t_integral = 0.0
+            # Clear saturation flags too — integral is now 0, no longer pegged.
+            self._t_saturated_since = None
+            self._vpd_saturated_since = None
             force_solve = True
             logger.info(f"[SolverProcess] Light transition at t={current_time:.0f}s — "
                         f"forcing OSQP cold start + failsafe reset")
@@ -352,8 +355,6 @@ class SolverProcess:
             'total_ms': t_elapsed,
             'failsafe_level': fs_level,
             'innovation_rms': self.ekf.innovation_magnitude(),
-            'T_out': float(d_current[1]),
-            'w_out': float(d_current[2]),
             't_integral': float(self._t_integral),
             'vpd_integral': float(self._vpd_integral),
             't_integral_saturated': self._t_saturated_since is not None,

@@ -178,6 +178,34 @@ def test_saturation_clears_when_error_reverses():
     assert -0.05 < solver._t_integral < 0.05
 
 
+def test_light_transition_clears_integral_and_saturation_flags():
+    """A light transition zeroes the integral AND its saturation onset.
+
+    Previously the integral was reset to 0 but the saturation flag kept its
+    onset timestamp, so for one tick the info dict reported integral=0 and
+    saturated=True simultaneously. Pin against the regression.
+    """
+    solver = _make_solver(
+        integral_config={'gain': 0.01, 't_clamp_C': 0.05,
+                         'vpd_clamp_kPa': 0.3, 'saturation_warn_s': 60.0},
+        target_T=22.0, x_hat_T=20.0,
+    )
+    for _ in range(20):
+        solver.solve_once()
+    assert solver._t_saturated_since is not None
+
+    # Toggle the light state — the solver detects the transition and resets.
+    # The same tick re-accumulates one step of error post-reset, so the
+    # integral isn't exactly 0, but it must be well off the clamp.
+    solver.light_schedule = SimpleNamespace(is_on=lambda t: False)
+    solver.solve_once()
+
+    assert abs(solver._t_integral) < 0.05
+    assert abs(solver._vpd_integral) < 0.3
+    assert solver._t_saturated_since is None
+    assert solver._vpd_saturated_since is None
+
+
 def test_saturation_advisory_state_exposed_in_telemetry():
     """The per-tick info dict must surface integral state for dashboards."""
     solver = _make_solver(
