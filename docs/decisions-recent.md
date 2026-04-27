@@ -6,6 +6,41 @@
 
 # Recent Decisions
 
+## Integral action diagnosis — names what it is actually compensating for
+**Date:** 2026-04-27
+**Status:** Decided
+
+**Context**
+The previous decision note ("Integral action dt_solve correction", 2026-02-27) framed the reference-bias integral as compensation for "linearization mismatch". Subsequent piecewise-linearization work (2026-03-07) verified the B matrix is accurate within 0.01% of the nonlinear ground truth over the control horizon. Both can't be true — if linearization is that accurate, a ±4°C integral has no linearization error to absorb. A 3-angle review (thermo, MPC, code archaeology) was run to find what the integral is actually doing.
+
+**Decision**
+The integral is *not* a linearization patch. It absorbs persistent bias from slow unmodeled dynamics that the in-horizon QP plan cannot resolve:
+
+| Mechanism | Magnitude | Mechanism |
+|-----------|-----------|-----------|
+| Wall thermal mass beyond horizon | ~0.5–1.0°C | τ_wall = C_wall/UA_wall ≈ 10,000s vs. control horizon 450s — the QP literally cannot see the wall reach steady state in its plan. |
+| Outdoor-weather persistence-forecast bias | ~0.5–1.5°C | `mpc/forecast.py` holds T_out / w_out constant over the horizon. Any systematic bias (e.g., AC delivers air colder than the model claims) appears as a constant disturbance the QP cannot anticipate. |
+| HVAC supply-air lag | ~0.3–0.6°C | τ_hvac = 120s, persistent at high duty cycle. |
+| Affine VPD/RH linearization (exponential SVP over 15 steps) | ~0.2–0.4°C | Output linearization compounds because saturation vapor pressure is exponential in T. |
+
+The deeper structural reason: `mpc/solver.py` penalizes `||u - u_prev||²` (deviation from previous), not `||u||²`. With R on Δu, the QP has no incentive to drive u toward a specific value at steady state — tracking error is set by the Q/R balance, not the dynamics. Bias absorption has to happen somewhere, and today it happens in this integral.
+
+**Trade-offs**
+- ✅ The current behaviour is preserved (defaults match the prior hardcoded `gain=0.003`, `t_clamp=4.0`, `vpd_clamp=0.3`).
+- ✅ Constants moved to `config/room.yaml` under `room.integral_action` — tunable per room.
+- ✅ Saturation tracking + new `TYPE_INTEGRAL_SATURATED` advisory surface the case where the bias has pegged at clamp (signalling either equipment under-capacity or a model-reality gap that exceeds the bias headroom).
+- ✅ Per-tick `info` dict now includes `t_integral`, `vpd_integral`, and saturation flags so dashboards can monitor it.
+- ⚠️ The integral still applies to the *reference*, not the state estimate. The principled fix is an augmented-state output-disturbance observer with the EKF estimating a constant bias term per channel. Queued, not done — needs the regression suite (Task 5) to land safely.
+- ❌ Rejected: removing the integral. Without it, persistent steady-state error of 1.5–3.0°C would degrade compliance and stress the actuators. The integral is doing real work.
+
+**Implications**
+- `control/solver_process.py` reads the integral config from `room.integral_action`, falls back to legacy defaults when absent.
+- `advisory/templates.py:integral_saturated` produces grower-facing copy that names likely physical causes ("outdoor load exceeds capacity", "wall thermal mass mistuned").
+- `tests/test_integral_action.py` pins the math, the configurability, and the saturation tracking — first regression test on the controller path.
+- Follow-up task: replace the reference-bias integral with an augmented-state disturbance observer once Task 5's regression suite gives us a safety net.
+
+---
+
 ## Irrigation as feedforward disturbance, not MPC control variable
 **Date:** 2026-03-06
 **Status:** Decided

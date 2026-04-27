@@ -66,6 +66,9 @@ def run(args):
     failsafe = build_failsafe()
 
     # --- Solver ---
+    room_cfg = configs['room'].get('room', configs['room'])
+    integral_config = room_cfg.get('integral_action')
+
     solver = SolverProcess(
         io=io,
         dynamics=dynamics,
@@ -80,6 +83,7 @@ def run(args):
         redis_client=redis_client,
         room_id=args.room_id,
         compliance=compliance,
+        integral_config=integral_config,
     )
 
     # --- Gateway ---

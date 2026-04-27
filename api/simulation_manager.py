@@ -182,6 +182,9 @@ class SimulationManager:
 
             solution_store = SolutionStore()
 
+            room_cfg = configs['room'].get('room', configs['room'])
+            integral_config = room_cfg.get('integral_action')
+
             solver = SolverProcess(
                 io=io,
                 dynamics=dynamics,
@@ -196,6 +199,7 @@ class SimulationManager:
                 solution_store=solution_store,
                 compliance=compliance,
                 advisory_engine=advisory_engine,
+                integral_config=integral_config,
             )
 
             dispatch_config = configs['equipment'].get('dispatch', {})
