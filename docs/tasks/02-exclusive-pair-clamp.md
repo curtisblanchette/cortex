@@ -4,7 +4,9 @@
 
 ## Outcome
 
-The "sawtooth oscillation" the docs warned about doesn't exist in measurement.
+**Two findings, one expected, one not:**
+
+1. **The "sawtooth oscillation" the docs warned about doesn't exist** in measurement.
 12hr sims across all three profiles (instrumented `clamp_exclusive` capturing
 pre/post per solve):
 
@@ -16,8 +18,19 @@ pre/post per solve):
   stable for long runs. Heat/cool flips ~4×/hr, hum/dehum is essentially
   single-mode (dehum wins virtually always). Worst 60s window is 2 fires.
 
-The real cost was occasional regime-shift flips on `ac_dehum` heat/cool,
-not solve-by-solve sawtooth.
+2. **The hysteresis fix didn't move the needle** on flip count
+   (47 → 51 post-fix, within noise). Diagnostic: at the 51 flip moments the
+   median pre-clamp gap is 0.74; **zero** flips occurred within the 5% margin.
+   When the clamp fires, the median gap is 0.93 — the QP runs ~95/5 with a
+   tiny tail, not 51/49. The flips are **genuine regime shifts** (e.g. cool
+   60→5 while heat 4→25), not tie-breaking noise. The 5% hysteresis is the
+   right tool for the wrong problem.
+
+The real win of this task is the **telemetry baseline and documented
+measurement**, not the mitigation. The hysteresis is kept as harmless
+insurance (changes 0.9% of fires) against future scenarios where
+tie-breaking does appear; the per-pair counters surface real-world
+deviations if they happen.
 
 ## Shipped fix
 

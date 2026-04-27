@@ -41,12 +41,15 @@ Skipped (data-driven negatives):
 - ❌ Hard hysteresis lockout — risks trapping the wrong actuator during load steps (lights-on, door opening).
 
 **Trade-offs**
-- ✅ Suppresses the regime-shift flips on `ac_dehum` heat/cool without touching QP behaviour
 - ✅ No-op for `hvacd_full` and `ac_minimal` (no exclusive pairs in those registries)
-- ✅ Per-pair `fires`/`flips` counters surfaced in the per-tick `info` dict for production telemetry
+- ✅ Per-pair `fires`/`flips` counters surfaced in the per-tick `info` dict for production telemetry — this is the load-bearing improvement
 - ✅ Tunable per room via `room.clamp_hysteresis.hysteresis_margin`
-- ⚠️ Hysteresis can hold a stale winner for one solve when the QP genuinely wants the other; mitigated by the 5% close-band
+- ⚠️ At the chosen 5% margin, the hysteresis had **no measurable effect on flip count** in re-measurement (47 → 51, within run-to-run noise). The flips on `ac_dehum` heat/cool are genuine regime shifts (median gap at flip = 0.74), not tie-breaking noise (median gap at fire = 0.93). The hysteresis is solving a problem that doesn't really exist in current sims.
+- ⚠️ A 20% margin would catch ~17/51 flips but starts interfering with valid load-change responses. Not justified by current data.
 - ❌ Rejected: removing the constraint entirely. The QP wanting both is correct *intent* but the hardware is exclusive — the clamp is still required.
+
+**Why ship the hysteresis anyway**
+The 5% margin is harmless (changes 0.9% of fires) and provides cheap insurance against a tie-breaking failure mode that *might* appear in production (different room thermal mass, different equipment sizing, different growth phase). The telemetry counters will surface a real deviation if it appears, at which point the margin can be raised by config without code change. Net cost of keeping it at the conservative default: ~10 lines of code, zero behavioural risk.
 
 **Implications**
 - `mpc/constraints.py:ConstraintBuilder.__init__` accepts `clamp_config` with `hysteresis_margin` (default 0.0 → legacy behaviour).
