@@ -318,6 +318,12 @@ class SolverProcess:
             'innovation_rms': self.ekf.innovation_magnitude(),
         }
 
+        # Surface exclusive-pair clamp metrics (cumulative since start).
+        # Empty dict on profiles with no exclusive pairs (hvacd_full, ac_minimal).
+        clamp_metrics = getattr(self.mpc.constraints, 'clamp_metrics', None)
+        if clamp_metrics is not None:
+            info['clamp_metrics'] = clamp_metrics()
+
         # Telemetry
         if self._telemetry_callback:
             derived = self.dynamics.derived_outputs(x_hat)

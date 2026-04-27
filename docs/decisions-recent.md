@@ -6,6 +6,56 @@
 
 # Recent Decisions
 
+## Exclusive-pair clamp soft hysteresis — measured, not feared
+**Date:** 2026-04-27
+**Status:** Decided
+
+**Context**
+`mpc/constraints.py:clamp_exclusive` enforces non-convex mutual exclusivity by zeroing the smaller member of each exclusive pair after the QP returns. The prior `mpc-solver.md` warned about "saw-tooth oscillation when the QP plans to use both actuators". This worry had never been measured; the team would not commit to a fix without data.
+
+**Method**
+`scripts/measure_clamp_oscillation.py` monkey-patches `clamp_exclusive` to record (pre, post) for every solve across three 12hr `--fast` sims (`hvacd_full`, `ac_dehum`, `ac_minimal`). Raw per-tick CSVs and a summary table land in `docs/tasks/02-results/`.
+
+**Findings**
+| Profile | Pair channels in registry | Clamp activity |
+|---|---|---|
+| `hvacd_full` | None — uses `cool_sp` / `heat_sp` / `dehum_sp` setpoint mode | Constraint inactive (1399 solves, 0 fires) |
+| `ac_minimal` | None — only `u_cool` | Constraint inactive (1392 solves, 0 fires) |
+| `ac_dehum` | `u_heat`/`u_cool` and `u_hum`/`u_dehum` | Heavy |
+
+For `ac_dehum` (1392 solves over 12h):
+
+| Pair | Fires (% of solves) | Winner-flips A↔B | Worst 60s window |
+|---|---|---|---|
+| `u_heat__u_cool` | 1084 (78%) | 47 (~4/hr) | 2 fires |
+| `u_hum__u_dehum` | 1080 (78%) | 4 (~0.3/hr) | 2 fires |
+
+The QP genuinely wants both pair members on most solves — pure linearization split, since R penalises `‖Δu‖²` not `‖u‖²`. Post-clamp the winner is **stable for long runs**: heat/cool shifts regime ~4×/hr, hum/dehum is essentially single-mode (dehum wins virtually always). The "sawtooth" the docs warned about does not appear in measurement.
+
+**Decision**
+Add **soft hysteresis** to `clamp_exclusive`: when `|u_a − u_b| / max(u_a, u_b) < hysteresis_margin` (default 5%), keep the previous winner instead of always picking the larger value. Track per-pair `fires` and `flips` counters for telemetry.
+
+Skipped (data-driven negatives):
+- ❌ MIQP — 80–400ms on Pi 5 vs. 1Hz target. Not feasible.
+- ❌ Switching-cost q-bias — overkill for ~4 flips/hr.
+- ❌ Hard hysteresis lockout — risks trapping the wrong actuator during load steps (lights-on, door opening).
+
+**Trade-offs**
+- ✅ Suppresses the regime-shift flips on `ac_dehum` heat/cool without touching QP behaviour
+- ✅ No-op for `hvacd_full` and `ac_minimal` (no exclusive pairs in those registries)
+- ✅ Per-pair `fires`/`flips` counters surfaced in the per-tick `info` dict for production telemetry
+- ✅ Tunable per room via `room.clamp_hysteresis.hysteresis_margin`
+- ⚠️ Hysteresis can hold a stale winner for one solve when the QP genuinely wants the other; mitigated by the 5% close-band
+- ❌ Rejected: removing the constraint entirely. The QP wanting both is correct *intent* but the hardware is exclusive — the clamp is still required.
+
+**Implications**
+- `mpc/constraints.py:ConstraintBuilder.__init__` accepts `clamp_config` with `hysteresis_margin` (default 0.0 → legacy behaviour).
+- `clamp_metrics()` exposes per-pair `fires`/`flips`/`winner`; `SolverProcess` puts the dict into the per-tick `info` under the `clamp_metrics` key.
+- `tests/test_clamp_oscillation.py` pins legacy and hysteresis behaviour, counter invariants, and the no-pair-no-op profile.
+- `scripts/measure_clamp_oscillation.py` and `docs/tasks/02-results/` document the numbers; future regressions can re-run the script.
+
+---
+
 ## Irrigation as feedforward disturbance, not MPC control variable
 **Date:** 2026-03-06
 **Status:** Decided

@@ -47,15 +47,28 @@ class ConstraintBuilder:
         ('u_heat', 'u_cool', 100.0),
     ]
 
-    def __init__(self, registry, equipment_config=None):
+    def __init__(self, registry, equipment_config=None, clamp_config=None):
         """
         Args:
             registry: ActuatorRegistry instance.
             equipment_config: Optional equipment config for HVACD limit overrides.
+            clamp_config: Optional dict with `hysteresis_margin` (fraction, e.g.
+                0.05 means "if pre-clamp |u_a - u_b| / max(u_a, u_b) < 5%, prefer
+                the previous winner"). Suppresses the few flips/hour observed in
+                ac_dehum sims without changing QP behaviour. Default 0.0 = no
+                hysteresis (legacy "always pick larger").
         """
         self.n_x = N_STATES
         self.n_u = registry.n_u
         self._channel_names = list(registry.channel_names)
+
+        cfg = clamp_config or {}
+        self._hysteresis_margin = float(cfg.get('hysteresis_margin', 0.0))
+        # Per-pair previous winner ('a' / 'b' / None) and observability counters.
+        # Keyed by (idx_a, idx_b) for stability across reconfiguration.
+        self._prev_winner = {}
+        self._fire_count = {}    # solves where both pre-clamp values > 0
+        self._flip_count = {}    # solves where the winner changed
 
         # State bounds
         self.x_min = np.array([DEFAULT_STATE_BOUNDS[n][0] for n in STATE_NAMES])
@@ -140,14 +153,69 @@ class ConstraintBuilder:
         The QP constraint u_a + u_b <= 100 limits overlap but can't enforce
         true mutual exclusivity (that's non-convex). This clamp enforces it
         after the solve. The MPC re-solves every tick, so it adapts immediately.
+
+        Soft hysteresis: when both pre-clamp values are within
+        `hysteresis_margin` of each other, prefer the previous winner. This
+        suppresses the few flips/hour observed on ac_dehum (heat/cool
+        regime shifts ~4×/hr) without touching QP behaviour. See
+        `docs/decisions-recent.md` "Exclusive-pair clamp soft hysteresis".
+
+        Tracks per-pair fire and flip counts for telemetry; read via
+        `clamp_metrics()` and reset via `reset_clamp_metrics()`.
         """
         for idx_a, idx_b, _ in self.exclusive_pairs:
-            if u[idx_a] > 0 and u[idx_b] > 0:
-                if u[idx_a] >= u[idx_b]:
-                    u[idx_b] = 0.0
-                else:
-                    u[idx_a] = 0.0
+            key = (idx_a, idx_b)
+            a, b = u[idx_a], u[idx_b]
+            if a <= 0 or b <= 0:
+                continue
+
+            self._fire_count[key] = self._fire_count.get(key, 0) + 1
+
+            # Decide the winner. Hysteresis kicks in only when the two values
+            # are close — otherwise the larger always wins (legacy behaviour).
+            mx = max(a, b)
+            close = (mx > 0 and abs(a - b) / mx < self._hysteresis_margin)
+            prev = self._prev_winner.get(key)
+            if close and prev in ('a', 'b'):
+                winner = prev
+            else:
+                winner = 'a' if a >= b else 'b'
+
+            if winner == 'a':
+                u[idx_b] = 0.0
+            else:
+                u[idx_a] = 0.0
+
+            if prev is not None and prev != winner:
+                self._flip_count[key] = self._flip_count.get(key, 0) + 1
+            self._prev_winner[key] = winner
         return u
+
+    def clamp_metrics(self):
+        """Return per-pair clamp activity counters.
+
+        Returns a dict keyed by `'<channel_a>__<channel_b>'` with `fires`
+        (solves where both pre-clamp > 0) and `flips` (winner changes).
+        Used by SolverProcess to surface the counters in the per-tick info
+        dict and by the regression test in `tests/test_clamp_oscillation.py`.
+        """
+        out = {}
+        for idx_a, idx_b, _ in self.exclusive_pairs:
+            key = (idx_a, idx_b)
+            name = f'{self._channel_names[idx_a]}__{self._channel_names[idx_b]}'
+            out[name] = {
+                'fires': self._fire_count.get(key, 0),
+                'flips': self._flip_count.get(key, 0),
+                'winner': self._prev_winner.get(key),
+            }
+        return out
+
+    def reset_clamp_metrics(self):
+        """Zero the fire/flip counters. Used between sim profiles in
+        scripts/measure_clamp_oscillation.py and at the start of tests."""
+        self._fire_count.clear()
+        self._flip_count.clear()
+        self._prev_winner.clear()
 
     def apply_mode_constraints(self, x_hat, u_prev):
         """Pre-solve bound tightening based on current operating mode.

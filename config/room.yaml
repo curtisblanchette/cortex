@@ -45,3 +45,17 @@ room:
   # Plant defaults
   N_plants: 100
   phase: mid_flower
+
+  # Soft hysteresis on the exclusive-pair clamp (mpc/constraints.py).
+  #
+  # The QP returns plans that use both members of a pair (heat+cool, hum+dehum)
+  # on the majority of solves on ac_dehum profiles — pure linearization split,
+  # since R penalises Δu not magnitude. The post-solve clamp picks a winner.
+  # Without hysteresis, when the two pre-clamp values are nearly equal the
+  # winner can flip across solves (~4/hr on heat/cool, measured 12hr ac_dehum
+  # sim, see docs/tasks/02-results/clamp_summary.md).
+  #
+  # `hysteresis_margin = 0.05` means: when |u_a - u_b| / max(u_a, u_b) < 5%,
+  # keep the previous winner. Set to 0.0 to disable (legacy behaviour).
+  clamp_hysteresis:
+    hysteresis_margin: 0.05

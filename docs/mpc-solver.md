@@ -27,7 +27,13 @@ Active pairs (auto-detected from registry):
 
 **Why not cross-penalty?** Bilinear u_a*u_b in P makes P indefinite → OSQP rejects it. True mutual exclusion is non-convex; linear constraint + clamp is the best convex approximation.
 
-**Known trade-off:** Clamp can cause saw-tooth oscillation when QP plans to use both actuators (e.g., dehum for waste heat).
+**Measured behaviour** (12hr `ac_dehum` sim, see `docs/tasks/02-results/clamp_summary.md`):
+- The QP plans to use both pair members on **78% of solves** (linearization split — R penalises Δu, no penalty on splitting).
+- The post-clamp winner stays stable for long runs; not solve-by-solve sawtooth.
+- Heat/cool pair: ~4 winner-flips/hr, hum/dehum: ~0.3/hr (dehum dominates).
+- HVACD profiles (`hvacd_full`) **never trigger the clamp** — they expose `cool_sp`/`heat_sp`/`dehum_sp`, not the standalone `u_cool`/`u_heat`/`u_dehum` channels the pairs key off.
+
+**Mitigation:** Soft hysteresis in `clamp_exclusive` keeps the previous winner when the two pre-clamp values are within `room.clamp_hysteresis.hysteresis_margin` of each other (default 5%). Suppresses regime-shift flips without touching the QP.
 
 ## Predictive Disturbance Forecast
 

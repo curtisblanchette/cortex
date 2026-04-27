@@ -88,7 +88,9 @@ def build_mpc(dynamics, shared_params, registry, configs):
     """Build the MPC solver."""
     from mpc.solver import MPCSolver
     from mpc.constraints import ConstraintBuilder
-    constraints = ConstraintBuilder(registry)
+    room_cfg = configs['room'].get('room', configs['room'])
+    clamp_config = room_cfg.get('clamp_hysteresis')
+    constraints = ConstraintBuilder(registry, clamp_config=clamp_config)
     return MPCSolver(dynamics, shared_params, registry, Np=60, Nc=30,
                      constraints=constraints, step_s=30.0)
 
