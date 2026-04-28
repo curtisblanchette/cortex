@@ -58,10 +58,10 @@ Skipped (data-driven negatives):
 - ❌ Rejected: removing the clamp constraint entirely. The QP wanting both is correct *intent* but the hardware is exclusive — the clamp is still required.
 
 **Implications**
-- `mpc/constraints.py:ConstraintBuilder.__init__` accepts `clamp_config` with `hysteresis_margin` (default 0.0 → legacy behaviour).
-- `clamp_metrics()` exposes per-pair `fires`/`flips`/`winner`; `SolverProcess` puts the dict into the per-tick `info` under the `clamp_metrics` key.
-- `tests/test_clamp_oscillation.py` pins legacy and hysteresis behaviour, counter invariants, and the no-pair-no-op profile.
-- `scripts/measure_clamp_oscillation.py` and `docs/tasks/02-results/` document the numbers; future regressions can re-run the script.
+- `mpc/constraints.py:ConstraintBuilder` exposes `clamp_metrics()` returning per-pair `fires` / `flips` / `winner`; counters are updated inside the legacy clamp.
+- `control/solver_process.py` puts `clamp_metrics()` output into the per-tick `info['clamp_metrics']` and calls `reset_clamp_metrics()` on light transitions so values are "this period" rather than lifetime.
+- `tests/test_clamp_oscillation.py` pins legacy clamp behaviour, counter invariants, and the no-pair-no-op profile.
+- `scripts/measure_clamp_oscillation.py` and `docs/tasks/02-results/` document the baseline numbers; future regressions can re-run the script.
 
 ---
 

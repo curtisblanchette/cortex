@@ -153,6 +153,9 @@ class SolverProcess:
             self._ema_delta_T_leaf = None  # re-seed on light transition
             self._vpd_integral = 0.0       # prevent stale bias carrying over
             self._t_integral = 0.0
+            # Reset clamp telemetry per lights-on/off cycle so dashboards
+            # can interpret fires/flips as "this period" rather than lifetime.
+            self.mpc.constraints.reset_clamp_metrics()
             force_solve = True
             logger.info(f"[SolverProcess] Light transition at t={current_time:.0f}s — "
                         f"forcing OSQP cold start + failsafe reset")
@@ -318,11 +321,10 @@ class SolverProcess:
             'innovation_rms': self.ekf.innovation_magnitude(),
         }
 
-        # Surface exclusive-pair clamp metrics (cumulative since start).
-        # Empty dict on profiles with no exclusive pairs (hvacd_full, ac_minimal).
-        clamp_metrics = getattr(self.mpc.constraints, 'clamp_metrics', None)
-        if clamp_metrics is not None:
-            info['clamp_metrics'] = clamp_metrics()
+        # Surface exclusive-pair clamp metrics (counters reset per lights-on/off
+        # cycle, so values are "this period" not lifetime). Empty dict on
+        # profiles with no exclusive pairs (hvacd_full, ac_minimal).
+        info['clamp_metrics'] = self.mpc.constraints.clamp_metrics()
 
         # Telemetry
         if self._telemetry_callback:

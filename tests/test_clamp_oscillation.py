@@ -102,6 +102,26 @@ def test_reset_clears_state_and_counters():
     assert m['winner'] is None
 
 
+def test_reset_after_accumulated_state_zeros_winner():
+    """After reset, the next clamp call has no prior winner and treats the
+    decision as a fresh "pick larger" — important because the solver calls
+    reset_clamp_metrics() on every light transition."""
+    cb = _builder()
+    cb.clamp_exclusive(np.array([10.0, 20.0]))  # cool wins, fire 1
+    cb.clamp_exclusive(np.array([20.0, 10.0]))  # heat wins, flip 1
+    assert cb.clamp_metrics()['u_heat__u_cool']['flips'] == 1
+
+    cb.reset_clamp_metrics()
+
+    # Same heat→cool transition that was a flip before is no longer a flip
+    # post-reset (no prior winner to compare against).
+    cb.clamp_exclusive(np.array([10.0, 20.0]))  # cool wins, fire 1, no flip
+    m = cb.clamp_metrics()['u_heat__u_cool']
+    assert m['fires'] == 1
+    assert m['flips'] == 0
+    assert m['winner'] == 'b'
+
+
 def test_pair_inactive_when_channels_absent_from_registry():
     """Profiles without u_heat/u_cool/u_hum/u_dehum get no pairs."""
     reg = _registry_with(['u_cool'])  # ac_minimal-style
