@@ -6,8 +6,8 @@
 
 # Recent Decisions
 
-## Exclusive-pair clamp soft hysteresis — measured, not feared
-**Date:** 2026-04-27
+## Exclusive-pair clamp measurement — telemetry, no mitigation needed
+**Date:** 2026-04-28
 **Status:** Decided
 
 **Context**
@@ -30,26 +30,32 @@ For `ac_dehum` (1392 solves over 12h):
 | `u_heat__u_cool` | 1084 (78%) | 47 (~4/hr) | 2 fires |
 | `u_hum__u_dehum` | 1080 (78%) | 4 (~0.3/hr) | 2 fires |
 
-The QP genuinely wants both pair members on most solves — pure linearization split, since R penalises `‖Δu‖²` not `‖u‖²`. Post-clamp the winner is **stable for long runs**: heat/cool shifts regime ~4×/hr, hum/dehum is essentially single-mode (dehum wins virtually always). The "sawtooth" the docs warned about does not appear in measurement.
+**Diagnostic on the heat/cool pair:**
+- Median pre-clamp gap `|a-b|/max(a,b)` = **0.93** — when the clamp fires, the larger value is typically ~14× the smaller. The QP runs ~95/5 with a tiny tail, not 51/49 tie-breaking.
+- At the 51 flip moments, median gap = **0.74**. **Zero** flips happen within a 5% close-band where hysteresis would engage.
+- The flips are **genuine regime shifts** (cool 60→5 while heat 4→25), not numerical noise. The MPC's existing structure — re-linearization every solve, `R` on `‖Δu‖²`, 1 Hz re-clamp — already gives stable winner selection.
 
 **Decision**
-Add **soft hysteresis** to `clamp_exclusive`: when `|u_a − u_b| / max(u_a, u_b) < hysteresis_margin` (default 5%), keep the previous winner instead of always picking the larger value. Track per-pair `fires` and `flips` counters for telemetry.
+**No mitigation. Telemetry only.** The "sawtooth" the docs warned about doesn't exist in measurement, and the QP cost structure already produces stable winners. Adding hysteresis would solve a problem that doesn't appear; it would also introduce a silent failure mode where stale-winner holds could mask real control degradation in future configurations.
+
+What ships:
+- Per-pair `fires` / `flips` / `winner` counters via `clamp_metrics()`.
+- Counters surfaced in the per-tick `info` dict under `clamp_metrics`, so production dashboards can watch for real-world deviations from the measured baseline.
+- The measurement script and captured CSVs in `docs/tasks/02-results/` as a re-runnable regression baseline.
+- `docs/mpc-solver.md` corrected: the "sawtooth" framing was intuition, not measurement.
 
 Skipped (data-driven negatives):
 - ❌ MIQP — 80–400ms on Pi 5 vs. 1Hz target. Not feasible.
-- ❌ Switching-cost q-bias — overkill for ~4 flips/hr.
-- ❌ Hard hysteresis lockout — risks trapping the wrong actuator during load steps (lights-on, door opening).
+- ❌ Switching-cost q-bias on the QP — overkill, would risk OSQP PSD invariant.
+- ❌ Hard hysteresis lockout — risks trapping the wrong actuator during load steps.
+- ❌ Soft hysteresis (5% close-band) — first prototyped, then removed: re-measurement showed flip count unchanged (47 → 51, within noise). The flips happen far outside the close band. Worse, hysteresis introduces a silent failure mode (stale-winner holds don't show up in `flips` or `fires` telemetry) — exactly the kind of debt this hardening pass is supposed to remove.
 
 **Trade-offs**
 - ✅ No-op for `hvacd_full` and `ac_minimal` (no exclusive pairs in those registries)
-- ✅ Per-pair `fires`/`flips` counters surfaced in the per-tick `info` dict for production telemetry — this is the load-bearing improvement
-- ✅ Tunable per room via `room.clamp_hysteresis.hysteresis_margin`
-- ⚠️ At the chosen 5% margin, the hysteresis had **no measurable effect on flip count** in re-measurement (47 → 51, within run-to-run noise). The flips on `ac_dehum` heat/cool are genuine regime shifts (median gap at flip = 0.74), not tie-breaking noise (median gap at fire = 0.93). The hysteresis is solving a problem that doesn't really exist in current sims.
-- ⚠️ A 20% margin would catch ~17/51 flips but starts interfering with valid load-change responses. Not justified by current data.
-- ❌ Rejected: removing the constraint entirely. The QP wanting both is correct *intent* but the hardware is exclusive — the clamp is still required.
-
-**Why ship the hysteresis anyway**
-The 5% margin is harmless (changes 0.9% of fires) and provides cheap insurance against a tie-breaking failure mode that *might* appear in production (different room thermal mass, different equipment sizing, different growth phase). The telemetry counters will surface a real deviation if it appears, at which point the margin can be raised by config without code change. Net cost of keeping it at the conservative default: ~10 lines of code, zero behavioural risk.
+- ✅ Per-pair `fires`/`flips` counters surfaced in the per-tick `info` dict — load-bearing observability, not preemptive control
+- ✅ No new knobs, no new failure modes; controller behaviour is bit-for-bit unchanged
+- ⚠️ If a future configuration genuinely produces tie-breaking sawtooth, the counters will reveal it and a targeted mitigation can be designed against real data
+- ❌ Rejected: removing the clamp constraint entirely. The QP wanting both is correct *intent* but the hardware is exclusive — the clamp is still required.
 
 **Implications**
 - `mpc/constraints.py:ConstraintBuilder.__init__` accepts `clamp_config` with `hysteresis_margin` (default 0.0 → legacy behaviour).

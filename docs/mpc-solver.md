@@ -33,7 +33,7 @@ Active pairs (auto-detected from registry):
 - Heat/cool pair: ~4 winner-flips/hr, hum/dehum: ~0.3/hr (dehum dominates).
 - HVACD profiles (`hvacd_full`) **never trigger the clamp** — they expose `cool_sp`/`heat_sp`/`dehum_sp`, not the standalone `u_cool`/`u_heat`/`u_dehum` channels the pairs key off.
 
-**Mitigation:** Soft hysteresis in `clamp_exclusive` keeps the previous winner when the two pre-clamp values are within `room.clamp_hysteresis.hysteresis_margin` of each other (default 5%). Suppresses regime-shift flips without touching the QP.
+**No mitigation needed.** A 5% soft-hysteresis was prototyped and removed: re-measurement showed flip count unchanged (47 → 51, within noise) because the flips happen at gaps far outside any reasonable close-band. The MPC's existing structure (re-linearization every solve, `R` on `‖Δu‖²`, 1 Hz re-clamp) already produces stable winners. What ships is **observability only** — per-pair `fires`/`flips` counters via `ConstraintBuilder.clamp_metrics()`, surfaced in the solver's per-tick `info` dict. If future configurations produce real sawtooth, the counters will reveal it.
 
 ## Predictive Disturbance Forecast
 

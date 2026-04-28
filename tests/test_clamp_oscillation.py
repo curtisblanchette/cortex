@@ -1,15 +1,16 @@
-"""Regression tests for the exclusive-pair clamp soft hysteresis.
+"""Regression tests for the exclusive-pair clamp.
 
-The QP returns plans that use both pair members on most solves (linearization
-split — see docs/decisions-recent.md). The post-solve clamp picks a winner.
-Without hysteresis, when the two pre-clamp values are nearly equal the
-winner can flip across solves; soft hysteresis (`hysteresis_margin`) keeps
-the previous winner inside the close band.
+The clamp enforces non-convex mutual exclusivity by zeroing the smaller
+pair member after the QP returns. Measurement on a 12hr ac_dehum sim
+showed no sawtooth — winners are naturally stable because the QP runs
+~95/5 (median pre-clamp gap 0.93), and flips are regime shifts not
+tie-breaking. So no hysteresis ships; what does ship is per-pair fire/
+flip counters that surface real-world clamp behaviour.
 
 These tests pin three invariants:
-  1. Legacy behaviour preserved when `hysteresis_margin = 0.0`.
-  2. With margin > 0, equal-ish values don't flip across solves.
-  3. Per-pair fire and flip counters update correctly.
+  1. The legacy "always pick larger" decision is preserved.
+  2. Per-pair fire and flip counters update correctly.
+  3. Profiles without exclusive-pair channels are a clean no-op.
 """
 
 from unittest.mock import MagicMock
@@ -19,7 +20,7 @@ import numpy as np
 from mpc.constraints import ConstraintBuilder
 
 
-def _registry_with_pair(channels):
+def _registry_with(channels):
     """Build a minimal registry mock exposing channel_names + bounds."""
     n = len(channels)
     reg = MagicMock()
@@ -32,17 +33,18 @@ def _registry_with_pair(channels):
     return reg
 
 
-def _builder(margin):
-    reg = _registry_with_pair(['u_heat', 'u_cool'])
-    cb = ConstraintBuilder(reg, clamp_config={'hysteresis_margin': margin})
-    # Sanity: the heat/cool pair is detected
-    assert len(cb.exclusive_pairs) == 1
+def _builder():
+    cb = ConstraintBuilder(_registry_with(['u_heat', 'u_cool']))
+    # The heat/cool pair is detected
+    pair_channels = {(cb._channel_names[a], cb._channel_names[b])
+                     for a, b, _ in cb.exclusive_pairs}
+    assert ('u_heat', 'u_cool') in pair_channels
     return cb
 
 
-def test_no_hysteresis_when_margin_is_zero():
-    """Margin=0 → legacy behaviour: always pick the larger value."""
-    cb = _builder(0.0)
+def test_clamp_picks_larger_value():
+    """Legacy behaviour: the larger pre-clamp value wins; tie → first member (a)."""
+    cb = _builder()
     u = np.array([40.0, 41.0])  # heat=40, cool=41 → cool wins
     cb.clamp_exclusive(u)
     assert u[0] == 0.0 and u[1] == 41.0
@@ -51,39 +53,22 @@ def test_no_hysteresis_when_margin_is_zero():
     cb.clamp_exclusive(u)
     assert u[0] == 41.0 and u[1] == 0.0
 
-
-def test_hysteresis_holds_winner_inside_close_band():
-    """With margin=5%, values within 5% of each other keep the previous winner."""
-    cb = _builder(0.05)
-
-    # First solve: heat=40, cool=41 → cool wins (1/41 = 2.4%, within margin
-    # but no prior winner so larger wins).
-    u = np.array([40.0, 41.0])
+    u = np.array([30.0, 30.0])  # tie → first member (heat) wins
     cb.clamp_exclusive(u)
-    assert u[1] == 41.0 and u[0] == 0.0
+    assert u[0] == 30.0 and u[1] == 0.0
 
-    # Second solve: heat=41, cool=40 (within margin). Hysteresis should hold
-    # cool as winner despite heat now being marginally larger.
-    u = np.array([41.0, 40.0])
+
+def test_clamp_no_op_when_only_one_member_active():
+    """When one pair member is already 0, the clamp leaves the other alone."""
+    cb = _builder()
+    u = np.array([0.0, 30.0])
     cb.clamp_exclusive(u)
-    assert u[1] == 40.0 and u[0] == 0.0  # cool still wins
-
-
-def test_hysteresis_releases_outside_close_band():
-    """When the gap exceeds margin, the larger member wins regardless."""
-    cb = _builder(0.05)
-    # Lock in cool as winner.
-    cb.clamp_exclusive(np.array([40.0, 41.0]))
-    # Now heat dominates by 20% — well outside margin → heat wins.
-    u = np.array([50.0, 40.0])
-    cb.clamp_exclusive(u)
-    assert u[0] == 50.0 and u[1] == 0.0
+    assert u[0] == 0.0 and u[1] == 30.0
 
 
 def test_metrics_track_fires_and_flips():
     """Counter invariants for clamp_metrics()."""
-    cb = _builder(0.0)
-    # Three solves, all with both > 0:
+    cb = _builder()
     cb.clamp_exclusive(np.array([10.0, 20.0]))  # cool wins (fire 1)
     cb.clamp_exclusive(np.array([10.0, 20.0]))  # cool wins (fire 2, no flip)
     cb.clamp_exclusive(np.array([20.0, 10.0]))  # heat wins (fire 3, flip 1)
@@ -96,9 +81,9 @@ def test_metrics_track_fires_and_flips():
     assert m['winner'] == 'a'  # heat
 
 
-def test_no_fire_when_only_one_member_active():
-    """Single-member solves don't increment the counter."""
-    cb = _builder(0.0)
+def test_no_fire_counted_when_only_one_member_active():
+    """Single-member solves don't increment the fire counter."""
+    cb = _builder()
     cb.clamp_exclusive(np.array([0.0, 30.0]))
     cb.clamp_exclusive(np.array([30.0, 0.0]))
     m = cb.clamp_metrics()['u_heat__u_cool']
@@ -107,7 +92,7 @@ def test_no_fire_when_only_one_member_active():
 
 
 def test_reset_clears_state_and_counters():
-    cb = _builder(0.05)
+    cb = _builder()
     cb.clamp_exclusive(np.array([40.0, 41.0]))
     cb.clamp_exclusive(np.array([20.0, 30.0]))
     cb.reset_clamp_metrics()
@@ -119,8 +104,8 @@ def test_reset_clears_state_and_counters():
 
 def test_pair_inactive_when_channels_absent_from_registry():
     """Profiles without u_heat/u_cool/u_hum/u_dehum get no pairs."""
-    reg = _registry_with_pair(['u_cool'])  # ac_minimal-style
-    cb = ConstraintBuilder(reg, clamp_config={'hysteresis_margin': 0.05})
+    reg = _registry_with(['u_cool'])  # ac_minimal-style
+    cb = ConstraintBuilder(reg)
     assert cb.exclusive_pairs == []
     # No-op clamp
     u = np.array([50.0])

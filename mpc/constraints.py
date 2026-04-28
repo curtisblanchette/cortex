@@ -47,24 +47,24 @@ class ConstraintBuilder:
         ('u_heat', 'u_cool', 100.0),
     ]
 
-    def __init__(self, registry, equipment_config=None, clamp_config=None):
+    def __init__(self, registry, equipment_config=None):
         """
         Args:
             registry: ActuatorRegistry instance.
             equipment_config: Optional equipment config for HVACD limit overrides.
-            clamp_config: Optional dict with `hysteresis_margin` (fraction, e.g.
-                0.05 means "if pre-clamp |u_a - u_b| / max(u_a, u_b) < 5%, prefer
-                the previous winner"). Suppresses the few flips/hour observed in
-                ac_dehum sims without changing QP behaviour. Default 0.0 = no
-                hysteresis (legacy "always pick larger").
         """
         self.n_x = N_STATES
         self.n_u = registry.n_u
         self._channel_names = list(registry.channel_names)
 
-        cfg = clamp_config or {}
-        self._hysteresis_margin = float(cfg.get('hysteresis_margin', 0.0))
         # Per-pair previous winner ('a' / 'b' / None) and observability counters.
+        # The MPC's QP cost structure already produces stable winner selection
+        # (R penalises ‖Δu‖², B is re-linearized every solve, clamp re-runs at
+        # 1 Hz). Measurement on a 12hr ac_dehum sim showed no sawtooth: median
+        # pre-clamp gap is 0.93 (95/5 splits, not tie-breaking), and the flips
+        # that do occur are regime shifts (median gap 0.74), not numerical
+        # noise. These counters surface the behaviour for production
+        # observability so a real deviation would be visible.
         # Keyed by (idx_a, idx_b) for stability across reconfiguration.
         self._prev_winner = {}
         self._fire_count = {}    # solves where both pre-clamp values > 0
@@ -154,14 +154,10 @@ class ConstraintBuilder:
         true mutual exclusivity (that's non-convex). This clamp enforces it
         after the solve. The MPC re-solves every tick, so it adapts immediately.
 
-        Soft hysteresis: when both pre-clamp values are within
-        `hysteresis_margin` of each other, prefer the previous winner. This
-        suppresses the few flips/hour observed on ac_dehum (heat/cool
-        regime shifts ~4×/hr) without touching QP behaviour. See
-        `docs/decisions-recent.md` "Exclusive-pair clamp soft hysteresis".
-
         Tracks per-pair fire and flip counts for telemetry; read via
-        `clamp_metrics()` and reset via `reset_clamp_metrics()`.
+        `clamp_metrics()` and reset via `reset_clamp_metrics()`. See
+        `docs/decisions-recent.md` "Exclusive-pair clamp measurement" for
+        the data showing no sawtooth in current sims.
         """
         for idx_a, idx_b, _ in self.exclusive_pairs:
             key = (idx_a, idx_b)
@@ -171,21 +167,13 @@ class ConstraintBuilder:
 
             self._fire_count[key] = self._fire_count.get(key, 0) + 1
 
-            # Decide the winner. Hysteresis kicks in only when the two values
-            # are close — otherwise the larger always wins (legacy behaviour).
-            mx = max(a, b)
-            close = (mx > 0 and abs(a - b) / mx < self._hysteresis_margin)
-            prev = self._prev_winner.get(key)
-            if close and prev in ('a', 'b'):
-                winner = prev
-            else:
-                winner = 'a' if a >= b else 'b'
-
+            winner = 'a' if a >= b else 'b'
             if winner == 'a':
                 u[idx_b] = 0.0
             else:
                 u[idx_a] = 0.0
 
+            prev = self._prev_winner.get(key)
             if prev is not None and prev != winner:
                 self._flip_count[key] = self._flip_count.get(key, 0) + 1
             self._prev_winner[key] = winner
