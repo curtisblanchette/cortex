@@ -22,6 +22,7 @@ TYPE_SOLVER_DEGRADED = 'solver_degraded'
 TYPE_COMPLIANCE_DECLINING = 'compliance_declining'
 TYPE_CO2_FLOW = 'co2_flow'
 TYPE_LEAF_TEMP_DEFICIT = 'leaf_temp_deficit'
+TYPE_INTEGRAL_SATURATED = 'integral_saturated'
 
 # Channels
 CHANNELS = ('VPD', 'T', 'RH', 'CO2', 'theta')
@@ -36,6 +37,7 @@ DEFAULT_TTLS = {
     TYPE_COMPLIANCE_DECLINING: 900,
     TYPE_CO2_FLOW: 600,
     TYPE_LEAF_TEMP_DEFICIT: 600,
+    TYPE_INTEGRAL_SATURATED: 900,
 }
 
 # Cooldown before re-firing same (type, channel) pair
