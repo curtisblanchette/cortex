@@ -26,10 +26,11 @@ Domain docs live in `/docs`. Each starts with a `<!-- SUMMARY -->` block (Scope 
 > Control Loop (SolverProcess, Gateway, schedulers, failsafe ladder) → [`docs/domains/control-loop.md`](docs/domains/control-loop.md)
 > Simulation (SimulatedRoom, weather presets, scenarios, faults) → [`docs/domains/simulation.md`](docs/domains/simulation.md)
 
-**Decisions and tasks**
+**Decisions, specs, and tasks**
 
 > Decisions — recent (last 90 days) → [`docs/decisions-recent.md`](docs/decisions-recent.md)
 > Decisions — archive → [`docs/decisions-archive.md`](docs/decisions-archive.md)
+> Specs — original build plans (historical) → [`docs/specs/`](docs/specs)
 > Hardening tasks workstream → [`docs/tasks/`](docs/tasks)
 
 **When to load a doc:**

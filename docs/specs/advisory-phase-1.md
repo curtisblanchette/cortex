@@ -1,3 +1,9 @@
+<!-- SUMMARY -->
+> **Scope:** Original Phase 1 build plan for the advisory engine — data model, severity tiers, advisory types, dedup/lifecycle rules, integration points.
+> **Status:** Historical — implemented, then extended. For current truth see [`docs/domains/advisory.md`](../domains/advisory.md) (now 8 types: original 5 plus `env_trend`, `co2_flow`, `leaf_temp_deficit`). Templates and lifecycle live in `advisory/templates.py` and `advisory/engine.py`. This file is preserved for design rationale, not as documentation of current behaviour.
+
+---
+
 # Advisory System — Phase 1 (Passive Monitoring)
 
 ## Concept
