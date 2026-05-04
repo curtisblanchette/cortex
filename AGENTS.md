@@ -2,6 +2,47 @@
 
 Grow room Model Predictive Control system. 7-state ODE physics model with OSQP-based MPC, EKF state estimation, and a modular actuator plugin architecture.
 
+## Non-negotiable
+ - After completing a plan's implementation or any implementation work, run `/docs` to update AGENTS.md, README.md, and the `/docs` domain library.
+
+## Domain Knowledge Index
+
+Domain docs live in `/docs`. Each starts with a `<!-- SUMMARY -->` block (Scope + Key constraint) — **scan that first**, only read the full file if the task actually requires the detail. Load reactively, not preemptively.
+
+**Top-level**
+
+> Architecture (3-process design, dependency graph, IO adapter, invariants) → [`docs/architecture.md`](docs/architecture.md)
+> Deployment (Pi 5, Redis IPC, MQTT/Modbus, data stores) → [`docs/deployment.md`](docs/deployment.md)
+> Testing (two-layer strategy, sim compliance, regression baselines) → [`docs/testing.md`](docs/testing.md)
+
+**Domain (`docs/domains/`)**
+
+> Physics Model (7-state ODE, vectors, calibrated params, sub-models) → [`docs/domains/physics-model.md`](docs/domains/physics-model.md)
+> MPC Solver (OSQP, exclusive pair clamp, forecast, CO2 scheduler) → [`docs/domains/mpc-solver.md`](docs/domains/mpc-solver.md)
+> EKF (predict/update, sensor fusion, innovation diagnostics) → [`docs/domains/ekf.md`](docs/domains/ekf.md)
+> Calibration (SLSQP loop, SharedParams atomic swap, what's tuned) → [`docs/domains/calibration.md`](docs/domains/calibration.md)
+> Actuator Plugins (registry, profiles, channels, dispatch specs) → [`docs/domains/actuator-plugins.md`](docs/domains/actuator-plugins.md)
+> Advisory (7 types, lifecycle, suppression rules) → [`docs/domains/advisory.md`](docs/domains/advisory.md)
+> Control Loop (SolverProcess, Gateway, schedulers, failsafe ladder) → [`docs/domains/control-loop.md`](docs/domains/control-loop.md)
+> Simulation (SimulatedRoom, weather presets, scenarios, faults) → [`docs/domains/simulation.md`](docs/domains/simulation.md)
+
+**Decisions and tasks**
+
+> Decisions — recent (last 90 days) → [`docs/decisions-recent.md`](docs/decisions-recent.md)
+> Decisions — archive → [`docs/decisions-archive.md`](docs/decisions-archive.md)
+> Hardening tasks workstream → [`docs/tasks/`](docs/tasks)
+
+**When to load a doc:**
+- You encounter a constraint or convention you don't recognize
+- You're about to make a structural decision (new actuator, new advisory, schema change)
+- Something in the code looks like it conflicts with a doc — flag it; one of them is out of date
+
+**When NOT to load:** small bug fixes, config tweaks, or tasks already self-contained from this conversation.
+
+## Post-Implementation Workflow
+
+After completing a plan or significant implementation work, run the docs sync workflow (`/docs`) to update AGENTS.md, README.md, and `/docs/`. Decisions made under uncertainty (rejected alternatives, accepted trade-offs, quick fixes over proper fixes) belong in `docs/decisions-recent.md` so future sessions don't re-litigate them.
+
 ## Quick Start
 
 ```bash
