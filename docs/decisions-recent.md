@@ -6,38 +6,62 @@
 
 # Recent Decisions
 
-## Integral action diagnosis — names what it is actually compensating for
-**Date:** 2026-04-27
+## Exclusive-pair clamp measurement — telemetry, no mitigation needed
+**Date:** 2026-04-28
 **Status:** Decided
 
 **Context**
-The previous decision note ("Integral action dt_solve correction", 2026-02-27) framed the reference-bias integral as compensation for "linearization mismatch". Subsequent piecewise-linearization work (2026-03-07) verified the B matrix is accurate within 0.01% of the nonlinear ground truth over the control horizon. Both can't be true — if linearization is that accurate, a ±4°C integral has no linearization error to absorb. A 3-angle review (thermo, MPC, code archaeology) was run to find what the integral is actually doing.
+`mpc/constraints.py:clamp_exclusive` enforces non-convex mutual exclusivity by zeroing the smaller member of each exclusive pair after the QP returns. The prior `mpc-solver.md` warned about "saw-tooth oscillation when the QP plans to use both actuators". This worry had never been measured; the team would not commit to a fix without data.
+
+**Method**
+`scripts/measure_clamp_oscillation.py` monkey-patches `clamp_exclusive` to record (pre, post) for every solve across three 12hr `--fast` sims (`hvacd_full`, `ac_dehum`, `ac_minimal`). Raw per-tick CSVs and a summary table land in `docs/tasks/02-results/`.
+
+**Findings**
+| Profile | Pair channels in registry | Clamp activity |
+|---|---|---|
+| `hvacd_full` | None — uses `cool_sp` / `heat_sp` / `dehum_sp` setpoint mode | Constraint inactive (1399 solves, 0 fires) |
+| `ac_minimal` | None — only `u_cool` | Constraint inactive (1392 solves, 0 fires) |
+| `ac_dehum` | `u_heat`/`u_cool` and `u_hum`/`u_dehum` | Heavy |
+
+For `ac_dehum` (1392 solves over 12h):
+
+| Pair | Fires (% of solves) | Winner-flips A↔B | Worst 60s window |
+|---|---|---|---|
+| `u_heat__u_cool` | 1084 (78%) | 47 (~4/hr) | 2 fires |
+| `u_hum__u_dehum` | 1080 (78%) | 4 (~0.3/hr) | 2 fires |
+
+**Diagnostic on the heat/cool pair:**
+- Median pre-clamp gap `|a-b|/max(a,b)` = **0.93** — when the clamp fires, the larger value is typically ~14× the smaller. The QP runs ~95/5 with a tiny tail, not 51/49 tie-breaking.
+- At the 51 flip moments, median gap = **0.74**. **Zero** flips happen within a 5% close-band where hysteresis would engage.
+- The flips are **genuine regime shifts** (cool 60→5 while heat 4→25), not numerical noise. The MPC's existing structure — re-linearization every solve, `R` on `‖Δu‖²`, 1 Hz re-clamp — already gives stable winner selection.
 
 **Decision**
-The integral is *not* a linearization patch. It absorbs persistent bias from slow unmodeled dynamics that the in-horizon QP plan cannot resolve:
+**No mitigation. Telemetry only.** The "sawtooth" the docs warned about doesn't exist in measurement, and the QP cost structure already produces stable winners. Adding hysteresis would solve a problem that doesn't appear; it would also introduce a silent failure mode where stale-winner holds could mask real control degradation in future configurations.
 
-| Mechanism | Magnitude | Mechanism |
-|-----------|-----------|-----------|
-| Wall thermal mass beyond horizon | ~0.5–1.0°C | τ_wall = C_wall/UA_wall ≈ 10,000s vs. control horizon 450s — the QP literally cannot see the wall reach steady state in its plan. |
-| Outdoor-weather persistence-forecast bias | ~0.5–1.5°C | `mpc/forecast.py` holds T_out / w_out constant over the horizon. Any systematic bias (e.g., AC delivers air colder than the model claims) appears as a constant disturbance the QP cannot anticipate. |
-| HVAC supply-air lag | ~0.3–0.6°C | τ_hvac = 120s, persistent at high duty cycle. |
-| Affine VPD/RH linearization (exponential SVP over 15 steps) | ~0.2–0.4°C | Output linearization compounds because saturation vapor pressure is exponential in T. |
+What ships:
+- Per-pair `fires` / `flips` / `winner` counters via `clamp_metrics()`.
+- Counters surfaced in the per-tick `info` dict under `clamp_metrics`, so production dashboards can watch for real-world deviations from the measured baseline.
+- The measurement script and captured CSVs in `docs/tasks/02-results/` as a re-runnable regression baseline.
+- `docs/mpc-solver.md` corrected: the "sawtooth" framing was intuition, not measurement.
 
-The deeper structural reason: `mpc/solver.py` penalizes `||u - u_prev||²` (deviation from previous), not `||u||²`. With R on Δu, the QP has no incentive to drive u toward a specific value at steady state — tracking error is set by the Q/R balance, not the dynamics. Bias absorption has to happen somewhere, and today it happens in this integral.
+Skipped (data-driven negatives):
+- ❌ MIQP — 80–400ms on Pi 5 vs. 1Hz target. Not feasible.
+- ❌ Switching-cost q-bias on the QP — overkill, would risk OSQP PSD invariant.
+- ❌ Hard hysteresis lockout — risks trapping the wrong actuator during load steps.
+- ❌ Soft hysteresis (5% close-band) — first prototyped, then removed: re-measurement showed flip count unchanged (47 → 51, within noise). The flips happen far outside the close band. Worse, hysteresis introduces a silent failure mode (stale-winner holds don't show up in `flips` or `fires` telemetry) — exactly the kind of debt this hardening pass is supposed to remove.
 
 **Trade-offs**
-- ✅ The current behaviour is preserved (defaults match the prior hardcoded `gain=0.003`, `t_clamp=4.0`, `vpd_clamp=0.3`).
-- ✅ Constants moved to `config/room.yaml` under `room.integral_action` — tunable per room.
-- ✅ Saturation tracking + new `TYPE_INTEGRAL_SATURATED` advisory surface the case where the bias has pegged at clamp (signalling either equipment under-capacity or a model-reality gap that exceeds the bias headroom).
-- ✅ Per-tick `info` dict now includes `t_integral`, `vpd_integral`, and saturation flags so dashboards can monitor it.
-- ⚠️ The integral still applies to the *reference*, not the state estimate. The principled fix is an augmented-state output-disturbance observer with the EKF estimating a constant bias term per channel. Queued, not done — needs the regression suite (Task 5) to land safely.
-- ❌ Rejected: removing the integral. Without it, persistent steady-state error of 1.5–3.0°C would degrade compliance and stress the actuators. The integral is doing real work.
+- ✅ No-op for `hvacd_full` and `ac_minimal` (no exclusive pairs in those registries)
+- ✅ Per-pair `fires`/`flips` counters surfaced in the per-tick `info` dict — load-bearing observability, not preemptive control
+- ✅ No new knobs, no new failure modes; controller behaviour is bit-for-bit unchanged
+- ⚠️ If a future configuration genuinely produces tie-breaking sawtooth, the counters will reveal it and a targeted mitigation can be designed against real data
+- ❌ Rejected: removing the clamp constraint entirely. The QP wanting both is correct *intent* but the hardware is exclusive — the clamp is still required.
 
 **Implications**
-- `control/solver_process.py` reads the integral config from `room.integral_action`, falls back to legacy defaults when absent.
-- `advisory/templates.py:integral_saturated` produces grower-facing copy that names likely physical causes ("outdoor load exceeds capacity", "wall thermal mass mistuned").
-- `tests/test_integral_action.py` pins the math, the configurability, and the saturation tracking — first regression test on the controller path.
-- Follow-up task: replace the reference-bias integral with an augmented-state disturbance observer once Task 5's regression suite gives us a safety net.
+- `mpc/constraints.py:ConstraintBuilder` exposes `clamp_metrics()` returning per-pair `fires` / `flips` / `winner`; counters are updated inside the legacy clamp.
+- `control/solver_process.py` puts `clamp_metrics()` output into the per-tick `info['clamp_metrics']` and calls `reset_clamp_metrics()` on light transitions so values are "this period" rather than lifetime.
+- `tests/test_clamp_oscillation.py` pins legacy clamp behaviour, counter invariants, and the no-pair-no-op profile.
+- `scripts/measure_clamp_oscillation.py` and `docs/tasks/02-results/` document the baseline numbers; future regressions can re-run the script.
 
 ---
 

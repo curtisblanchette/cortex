@@ -27,7 +27,13 @@ Active pairs (auto-detected from registry):
 
 **Why not cross-penalty?** Bilinear u_a*u_b in P makes P indefinite → OSQP rejects it. True mutual exclusion is non-convex; linear constraint + clamp is the best convex approximation.
 
-**Known trade-off:** Clamp can cause saw-tooth oscillation when QP plans to use both actuators (e.g., dehum for waste heat).
+**Measured behaviour** (12hr `ac_dehum` sim, see `docs/tasks/02-results/clamp_summary.md`):
+- The QP plans to use both pair members on **78% of solves** (linearization split — R penalises Δu, no penalty on splitting).
+- The post-clamp winner stays stable for long runs; not solve-by-solve sawtooth.
+- Heat/cool pair: ~4 winner-flips/hr, hum/dehum: ~0.3/hr (dehum dominates).
+- HVACD profiles (`hvacd_full`) **never trigger the clamp** — they expose `cool_sp`/`heat_sp`/`dehum_sp`, not the standalone `u_cool`/`u_heat`/`u_dehum` channels the pairs key off.
+
+**No mitigation needed.** A 5% soft-hysteresis was prototyped and removed: re-measurement showed flip count unchanged (47 → 51, within noise) because the flips happen at gaps far outside any reasonable close-band. The MPC's existing structure (re-linearization every solve, `R` on `‖Δu‖²`, 1 Hz re-clamp) already produces stable winners. What ships is **observability only** — per-pair `fires`/`flips` counters via `ConstraintBuilder.clamp_metrics()`, surfaced in the solver's per-tick `info` dict. If future configurations produce real sawtooth, the counters will reveal it.
 
 ## Predictive Disturbance Forecast
 

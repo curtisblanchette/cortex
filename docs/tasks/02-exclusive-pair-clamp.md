@@ -1,39 +1,55 @@
 # Task 2 — Quantify and address exclusive-pair clamp oscillation
 
-**Status:** pending
+**Status:** done (2026-04-28) — see `docs/decisions-recent.md` "Exclusive-pair clamp measurement"
 
-## The punch
+## Outcome
 
-`mpc/constraints.py:137-150` post-solves the QP and zeroes the smaller actuator in each exclusive pair (heat/cool, hum/dehum). The convex QP optimizes against `u_a + u_b ≤ 100`; the clamp then enforces a non-convex constraint *after the fact*. `docs/mpc-solver.md:30` admits this "can cause saw-tooth oscillation when the QP plans to use both actuators (e.g., dehum for waste heat)".
+**The "sawtooth oscillation" the docs warned about doesn't exist in measurement.**
+12hr sims across all three profiles (instrumented `clamp_exclusive` capturing pre/post per solve):
 
-This admission has never been quantified in production. It might be benign, or it might be the dominant source of actuator wear and compliance noise. Either way, "we know it's a problem" is not a plan.
+- `hvacd_full` and `ac_minimal` — the registry doesn't expose the channels the
+  pair constraints key off (HVACD uses setpoint mode; ac_minimal has a single
+  cooling actuator). Clamp is dead code (0 fires in 1399 / 1392 solves).
+- `ac_dehum` — the QP plans both pair members on 78% of solves (linearization
+  split, since `R` penalises `‖Δu‖²` not `‖u‖²`), but post-clamp the winner is
+  **stable for long runs**. Heat/cool flips ~4×/hr, hum/dehum is essentially
+  single-mode (dehum wins virtually always). Worst 60s window is 2 fires.
 
-## Goal
+**Diagnostic on the heat/cool pair:**
+- Median pre-clamp gap `|a-b|/max(a,b)` = **0.93** — when the clamp fires, the
+  larger value is typically ~14× the smaller. The QP runs ~95/5 with a tiny
+  tail, not 51/49 tie-breaking.
+- At the 51 flip moments, median gap = **0.74**. The flips are genuine regime
+  shifts (e.g. cool 60→5 while heat 4→25), not numerical noise.
+- The MPC's existing structure — re-linearization every solve, `R` on `‖Δu‖²`,
+  1 Hz re-clamp — already produces stable winners.
 
-1. **Measure** the oscillation: across all profiles and growth phases, how often per hour is the *non-clamped* actuator zeroed by the post-solve clamp? What is the mean toggle frequency on each affected channel?
-2. **Decide** the fix:
-   - **Hysteresis lockout** — once a pair is clamped to favor (say) cooling, lock heating to zero for N seconds before reconsidering.
-   - **Warm-start bias** — add a small cost to switching the active member of a pair across solves.
-   - **MIQP** — model exclusivity as a binary, accept the solve-time hit.
-   - **Status quo + monitoring** — if the toggle frequency is genuinely low, add an advisory and move on.
+## Shipped: telemetry only, no mitigation
 
-## Acceptance criteria
+- `mpc/constraints.py:ConstraintBuilder` — per-pair `fires` / `flips` / `winner`
+  counters via new `clamp_metrics()` method, plus `reset_clamp_metrics()` for
+  test/script harness use.
+- `control/solver_process.py` — puts `clamp_metrics()` into the per-tick `info`
+  dict under `clamp_metrics` for dashboards / production observability.
+- `tests/test_clamp_oscillation.py` — 6 regression tests pinning legacy clamp
+  behaviour (always pick larger), counter invariants, no-pair no-op profile.
+- `scripts/measure_clamp_oscillation.py` + `docs/tasks/02-results/` — the
+  measurement that drove the decision; re-runnable as a regression baseline.
+- `docs/mpc-solver.md` — corrected the "sawtooth" framing with measured numbers.
 
-- A `scripts/measure_clamp_oscillation.py` that runs sims across `hvacd_full`, `ac_dehum`, `ac_minimal` and reports per-channel toggle frequency, mean dwell time, and worst-case toggle in any 60s window.
-- One regression test in `tests/` that fails if toggle frequency exceeds an agreed threshold on a canonical 12-hour mid-flower run.
-- Implementation of the chosen fix, with the clamp's rationale and the chosen mitigation written into `docs/decisions-recent.md`.
+## Skipped (data-driven negatives)
 
-## Research questions for the team
-
-**Thermodynamics specialist**
-- Is there a physical scenario where using both heat and cool simultaneously is *correct* (e.g., dehumidification via reheat coil)? If so, the exclusivity constraint itself is wrong, not the clamp.
-- For the dehum/hum pair: is there ever a steady-state where the QP genuinely wants both at low duty cycle, indicating a model deficiency rather than an exclusivity violation?
-
-**MPC specialist**
-- Why does the QP plan to use both pair members? It has the constraint `u_a + u_b ≤ 100`, but no penalty for splitting. A small cross-cost (added linearly via slack) might break ties without making P indefinite.
-- Compare a hysteresis-lockout fix versus an MIQP formulation. What is the OSQP-vs-Gurobi/SCIP solve-time delta on a Pi 5? Is MIQP feasible at 1 Hz?
-- Does the integral action from Task 1 mask or amplify the clamp toggling?
-
-**SWE architecture**
-- The clamp lives in `mpc/constraints.py:clamp_exclusive`. Is it called every solve, or only on certain code paths? Are there places where the QP output is consumed before the clamp runs?
-- Where would per-channel toggle telemetry go: solver_process logs, advisory engine, or new metrics? It should be visible without recompiling.
+- **MIQP** — 80–400ms solve on Pi 5 vs. 1Hz target. Not feasible without a
+  solver swap (Gurobi/SCIP) the project doesn't depend on.
+- **Switching-cost q-bias on the QP** — overkill for ~4 flips/hr; would require
+  augmented variables and risk breaking the OSQP PSD invariant.
+- **Hard hysteresis lockout** — risks trapping the wrong actuator during load
+  steps (lights-on, door openings).
+- **Soft hysteresis (5% close-band)** — first prototyped, then removed:
+  re-measurement showed flip count unchanged (47 → 51, within run-to-run
+  noise). The flips happen at gaps far outside any reasonable close-band.
+  Worse, hysteresis introduces a silent failure mode (stale-winner holds
+  don't show up in `flips` or `fires` telemetry) — exactly the kind of debt
+  this hardening pass is supposed to remove. The right answer is to expose
+  the behaviour with counters and design a targeted fix only if real data
+  ever demands one.
