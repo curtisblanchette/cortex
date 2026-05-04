@@ -54,7 +54,8 @@ api/                     FastAPI dashboard/endpoints
 - **No auto-building fallback objects** — raise errors for missing dependencies
 - **No unnecessary abstractions** — don't add helpers or wrappers for one-time operations
 - YAML configs have top-level keys (e.g., `room:`, `hvacd:`) — code must handle both nested and flat dicts
-- R weight penalizes `||u - u_prev||²` (deviation from previous), NOT `||u||²`
+- R weight penalizes `||u - u_prev||²` (deviation from previous), NOT `||u||²` — this means the QP has no incentive to drive u toward a specific value at steady state, so persistent bias must be absorbed elsewhere (the reference-bias integral; see `docs/decisions-recent.md` "Integral action diagnosis")
+- Reference-bias integral in `control/solver_process.py` is **not** a linearization patch — it absorbs slow unmodeled dynamics (wall thermal mass with τ ≫ horizon, outdoor weather persistence-forecast bias, HVAC supply lag). Tunable per room via `room.integral_action` in `config/room.yaml`
 - OSQP needs: upper-triangular P, regularization for positive definiteness, high max_iter (~4000)
 
 ## Config
@@ -74,6 +75,37 @@ numpy, scipy, osqp, numba, pyyaml (core) — fastapi, uvicorn, redis, paho-mqtt 
 python -m pytest tests/
 ```
 
+## Domain Knowledge Index
+
+Domain docs live in `/docs`. Load them **reactively, not preemptively** — only read a file when the task actually touches that domain. Scan the summary header first; only read the full file if you need the detail.
+
+> Architecture → [`docs/architecture.md`](docs/architecture.md)
+> Physics Model → [`docs/physics-model.md`](docs/physics-model.md)
+> MPC Solver → [`docs/mpc-solver.md`](docs/mpc-solver.md)
+> Actuator Plugins → [`docs/actuator-plugins.md`](docs/actuator-plugins.md)
+> Simulation → [`docs/simulation.md`](docs/simulation.md)
+> Deployment & Infra → [`docs/deployment.md`](docs/deployment.md)
+> Testing Strategy → [`docs/testing.md`](docs/testing.md)
+> Recent Decisions → [`docs/decisions-recent.md`](docs/decisions-recent.md)
+> Decision Archive → [`docs/decisions-archive.md`](docs/decisions-archive.md)
+
+**When to load a doc:**
+- You encounter a pattern, constraint, or naming convention you don't recognize
+- You're about to make a structural decision (new plugin, constraint change, physics modification)
+- Something in the code looks like it conflicts with a doc
+
+**When NOT to load a doc:**
+- The task is self-contained and doesn't touch domain boundaries
+- You already have sufficient context from the current session
+- The task is a small bug fix or config change
+
+If something in the code contradicts a doc, flag it — one of them is out of date.
+
+## Post-Implementation Workflow
+
+After completing a plan or significant implementation work, run `/docs` to sync
+README.md, CLAUDE.md, and the /docs domain knowledge library.
+
 ## Preferences
 - Don't work in ~/code/esp/my-esp32-project/apps/cortex - this is the legacy version.
 - The web app is in ~/code/esp/my-esp32-project/apps/web
@@ -81,7 +113,7 @@ python -m pytest tests/
 ```
 python main.py simulate \
     --fast \
-    --duration 43200 \ 
-    --chart --chart-output output/$(date +%s).png \ 
+    --duration 43200 \
+    --chart --chart-output output/$(date +%s).png \
     --profile hvacd_full
 ```

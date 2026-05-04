@@ -70,7 +70,8 @@ class SolverProcess:
                  failsafe, shared_params, light_schedule, registry,
                  solution_store=None, redis_client=None,
                  room_id='room1', trigger_config=None,
-                 compliance=None, advisory_engine=None):
+                 compliance=None, advisory_engine=None,
+                 integral_config=None):
         self.io = io
         self.dynamics = dynamics
         self.ekf = ekf
@@ -112,9 +113,22 @@ class SolverProcess:
         # Smoothed leaf-air offset for derived RH target (avoids tick-to-tick jitter)
         self._ema_delta_T_leaf = None
 
-        # Integral action — biases references to compensate for linearization error
+        # Integral action — biases references to compensate for slow unmodeled
+        # dynamics (wall thermal mass, outdoor weather forecast bias, HVAC supply
+        # lag) that the MPC's in-horizon plan cannot resolve. NOT a linearization
+        # patch — see docs/decisions-recent.md "Integral action diagnosis".
+        cfg = integral_config or {}
+        self._integral_gain = float(cfg.get('gain', 0.003))
+        self._t_clamp = float(cfg.get('t_clamp_C', 4.0))
+        self._vpd_clamp = float(cfg.get('vpd_clamp_kPa', 0.3))
+        self._integral_saturation_warn_s = float(cfg.get('saturation_warn_s', 300.0))
+
         self._vpd_integral = 0.0
         self._t_integral = 0.0
+
+        # Saturation tracking — None when inside clamp, sim-time-of-onset when pegged.
+        self._t_saturated_since = None
+        self._vpd_saturated_since = None
 
         # Telemetry callback (optional)
         self._telemetry_callback = None
@@ -212,28 +226,40 @@ class SolverProcess:
                 'RH': ref_trajectory[0, 5],
             }
 
-            # Integral action — biases references to compensate for
-            # linearization mismatch and model error.
+            # Integral action — biases references to absorb persistent bias
+            # from slow unmodeled dynamics (wall thermal mass beyond horizon,
+            # outdoor weather persistence-forecast gap, HVAC supply lag).
             # Sign convention: error = (target - actual). Positive error means
             # actual is below target → integral accumulates positive → raises
-            # reference → MPC pushes harder upward.  Negative error (actual
-            # above target) → integral goes negative → lowers reference.
+            # reference → MPC pushes harder upward.
             dt_solve = float(self._mpc_interval)
             derived_now = self.dynamics.derived_outputs(x_hat)
 
             vpd_error = ref_trajectory[0, 0] - derived_now['VPD']
-            self._vpd_integral = np.clip(
-                self._vpd_integral + 0.003 * vpd_error * dt_solve,
-                -0.3, 0.3,
-            )
+            self._vpd_integral = float(np.clip(
+                self._vpd_integral + self._integral_gain * vpd_error * dt_solve,
+                -self._vpd_clamp, self._vpd_clamp,
+            ))
             ref_trajectory[:, 0] += self._vpd_integral
 
             t_error = ref_trajectory[0, 1] - x_hat[0]
-            self._t_integral = np.clip(
-                self._t_integral + 0.003 * t_error * dt_solve,
-                -4.0, 4.0,
-            )
+            self._t_integral = float(np.clip(
+                self._t_integral + self._integral_gain * t_error * dt_solve,
+                -self._t_clamp, self._t_clamp,
+            ))
             ref_trajectory[:, 1] += self._t_integral
+
+            # Track saturation onset (sim-time) for advisory and telemetry.
+            t_at_clamp = abs(abs(self._t_integral) - self._t_clamp) < 1e-9
+            vpd_at_clamp = abs(abs(self._vpd_integral) - self._vpd_clamp) < 1e-9
+            if t_at_clamp and self._t_saturated_since is None:
+                self._t_saturated_since = current_time
+            elif not t_at_clamp:
+                self._t_saturated_since = None
+            if vpd_at_clamp and self._vpd_saturated_since is None:
+                self._vpd_saturated_since = current_time
+            elif not vpd_at_clamp:
+                self._vpd_saturated_since = None
 
             u_opt, trajectory, solve_info = self.mpc.solve(
                 x_hat, d_forecast, ref_trajectory, u_prev=self.last_u,
@@ -298,6 +324,15 @@ class SolverProcess:
         # Advisory engine (runs on MPC solve cadence, not every tick)
         if self.advisory_engine and should_solve and trajectory is not None:
             compliance_report = self.compliance.report() if self.compliance else None
+            integral_state = {
+                't_value': self._t_integral,
+                't_clamp': self._t_clamp,
+                't_saturated_since': self._t_saturated_since,
+                'vpd_value': self._vpd_integral,
+                'vpd_clamp': self._vpd_clamp,
+                'vpd_saturated_since': self._vpd_saturated_since,
+                'saturation_warn_s': self._integral_saturation_warn_s,
+            }
             self.advisory_engine.evaluate(
                 trajectory=trajectory,
                 x_hat=x_hat,
@@ -309,6 +344,7 @@ class SolverProcess:
                 compliance_report=compliance_report,
                 innovation_rms=self.ekf.innovation_magnitude(),
                 innovation_vector=self.ekf.innovation.copy(),
+                integral_state=integral_state,
             )
 
         info = {
@@ -319,6 +355,10 @@ class SolverProcess:
             'total_ms': t_elapsed,
             'failsafe_level': fs_level,
             'innovation_rms': self.ekf.innovation_magnitude(),
+            't_integral': float(self._t_integral),
+            'vpd_integral': float(self._vpd_integral),
+            't_integral_saturated': self._t_saturated_since is not None,
+            'vpd_integral_saturated': self._vpd_saturated_since is not None,
         }
 
         # Surface exclusive-pair clamp metrics (counters reset per lights-on/off

@@ -280,6 +280,45 @@ def leaf_temp_deficit(deficit, traj_mean_deficit, lights_on):
     return severity, title, body, rec
 
 
+def integral_saturated(channel, value, clamp, duration_s, unit):
+    """Reference-bias integral has been pegged at clamp for an extended period.
+
+    A saturated integral means the MPC cannot reach the setpoint with its
+    in-horizon control authority and is leaning on the bias to compensate.
+    The bias is bounded by clamp, so once it pegs, residual tracking error
+    is absorbed by the operator instead of the controller.
+
+    channel    : 'T' or 'VPD'
+    value      : current integral magnitude
+    clamp      : configured clamp magnitude (positive)
+    duration_s : seconds the integral has been at clamp
+    unit       : '°C' or 'kPa' for human-readable body
+    """
+    sign = '+' if value > 0 else '-'
+    minutes = max(1, int(duration_s / 60))
+    title = f'{channel} reference-bias saturated ({sign}{abs(value):.2f}{unit})'
+    body = (
+        f'{channel} integral has been at its ±{clamp:g}{unit} clamp for {minutes} '
+        f'minute{"s" if minutes != 1 else ""}.\n'
+        f'The MPC is requesting more bias than configured to track the setpoint, '
+        f'which means an in-horizon control gap is being absorbed by the bias.'
+    )
+    if channel == 'T':
+        rec = (
+            'Likely causes: outdoor load exceeds equipment capacity, wall thermal '
+            'mass is mistuned, or the room.yaml outdoor preset does not match '
+            'reality. Check actual vs. modeled T_out, equipment effort, and '
+            'consider raising integral_action.t_clamp_C if equipment has headroom.'
+        )
+    else:
+        rec = (
+            'Likely causes: dehumidification capacity exceeded, outdoor humidity '
+            'higher than modeled, or transpiration model under-calibrated. Check '
+            'dehumidifier effort and outdoor w_out vs. expected.'
+        )
+    return title, body, rec
+
+
 def compliance_declining(channel, pct, mean, std, min_val, max_val, tolerance):
     title = f'{channel} compliance declining'
     body = (

@@ -14,7 +14,7 @@ from .models import (
     Advisory, SEVERITY_ORDER, DEFAULT_COOLDOWN_S,
     TYPE_ENV_BREACH, TYPE_ENV_TREND, TYPE_LIGHT_TRANSITION, TYPE_MODEL_DRIFT,
     TYPE_SOLVER_DEGRADED, TYPE_COMPLIANCE_DECLINING, TYPE_CO2_FLOW,
-    TYPE_LEAF_TEMP_DEFICIT,
+    TYPE_LEAF_TEMP_DEFICIT, TYPE_INTEGRAL_SATURATED,
     severity_from_eta, confidence_from_step,
 )
 from . import templates
@@ -126,7 +126,8 @@ class AdvisoryEngine:
     def evaluate(self, trajectory, x_hat, ref_targets, solve_info,
                  current_time, light_schedule, step_s=60.0,
                  compliance_report=None, innovation_rms=0.0,
-                 innovation_vector=None, co2_scheduler=None):
+                 innovation_vector=None, co2_scheduler=None,
+                 integral_state=None):
         """Run all advisory checks against current solver output.
 
         Args:
@@ -168,6 +169,9 @@ class AdvisoryEngine:
             self._check_co2_flow(co2_sched, now)
 
         self._check_leaf_temp_deficit(trajectory, x_hat, current_time, light_schedule, now)
+
+        if integral_state is not None:
+            self._check_integral_saturation(integral_state, current_time, now)
 
     # -- Public API --
 
@@ -755,6 +759,56 @@ class AdvisoryEngine:
             phase=self.phase_name,
         )
         self._emit(key, advisory, now)
+
+    def _check_integral_saturation(self, integral_state, current_time, now):
+        """Warn when the reference-bias integral has been pegged at clamp.
+
+        A saturated integral means the in-horizon QP plan plus ±clamp of bias
+        is still not enough to track the setpoint — the controller is asking
+        for more bias than is configured, and residual error is being absorbed
+        by the operator instead of by control.
+
+        See docs/decisions-recent.md "Integral action diagnosis" for the
+        physical meaning (typically: outdoor load > equipment capacity, or
+        wall-mass / outdoor-bias mismatch beyond what the integral can absorb).
+        """
+        warn_s = float(integral_state.get('saturation_warn_s', 300.0))
+
+        for channel, value_key, clamp_key, since_key, unit in (
+            ('T', 't_value', 't_clamp', 't_saturated_since', '°C'),
+            ('VPD', 'vpd_value', 'vpd_clamp', 'vpd_saturated_since', 'kPa'),
+        ):
+            key = (TYPE_INTEGRAL_SATURATED, channel)
+            since = integral_state.get(since_key)
+            if since is None:
+                if key in self._active and not self._active[key].resolved:
+                    self._active[key].resolved = True
+                continue
+
+            duration = max(0.0, current_time - float(since))
+            if duration < warn_s:
+                continue
+
+            value = float(integral_state.get(value_key, 0.0))
+            clamp = float(integral_state.get(clamp_key, 0.0))
+            severity = 'critical' if duration > 3 * warn_s else 'warning'
+            title, body, rec = templates.integral_saturated(
+                channel, value, clamp, duration, unit,
+            )
+            advisory = Advisory(
+                type=TYPE_INTEGRAL_SATURATED,
+                severity=severity,
+                channel=channel,
+                title=title,
+                body=body,
+                recommendation=rec,
+                current_value=round(value, 4),
+                target_value=clamp,
+                confidence=0.9,
+                room_id=self.room_id,
+                phase=self.phase_name,
+            )
+            self._emit(key, advisory, now)
 
     def _check_co2_flow(self, co2_scheduler, now):
         """Check CO2 flow rate during injection against expected rate."""

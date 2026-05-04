@@ -45,3 +45,19 @@ room:
   # Plant defaults
   N_plants: 100
   phase: mid_flower
+
+  # Reference-bias integral action (compensates for slow unmodeled dynamics).
+  #
+  # The MPC's prediction horizon (Np × step_s ≈ 1800 s) is shorter than the
+  # wall thermal time constant (C_wall / UA_wall ≈ 10,000 s), and the outdoor
+  # weather forecast is persistence-based, so persistent biases that the QP
+  # cannot resolve in-horizon are absorbed here. This is *not* a linearization
+  # patch — see docs/decisions-recent.md "Integral action diagnosis".
+  #
+  # Tune per room: smaller rooms have shorter wall τ and need lower gain;
+  # larger rooms or sites with strong outdoor coupling may need higher clamps.
+  integral_action:
+    gain: 0.003                 # 1/s, per unit error
+    t_clamp_C: 4.0              # ±°C cap on temperature reference bias
+    vpd_clamp_kPa: 0.3          # ±kPa cap on VPD reference bias
+    saturation_warn_s: 300      # advisory fires after this long pegged at clamp
